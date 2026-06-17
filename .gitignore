@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+out/
+next-env.d.ts
+
+# production
+build/
+dist/
+
+# env (never commit secrets)
+.env
+.env.local
+.env*.local
+
+# typescript build info
+*.tsbuildinfo
+
+# supabase local state
+supabase/.temp/
+supabase/.branches/
+
+# editor / os cruft
+.DS_Store
+/edit
+*.log
