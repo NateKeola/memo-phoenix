@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { CaptureMenu } from '@/components/capture-menu'
@@ -19,6 +20,9 @@ export default async function HomePage() {
       <h1>Memo Phoenix</h1>
       <p>Signed in as {user.email}</p>
       <CaptureMenu />
+      <p style={{ margin: '16px 0' }}>
+        <Link href="/ask">Ask your corpus &rarr;</Link>
+      </p>
       <form action="/auth/signout" method="post">
         <button type="submit">Sign out</button>
       </form>
