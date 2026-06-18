@@ -26,3 +26,4 @@ supabase/.branches/
 .DS_Store
 /edit
 *.log
+reference/

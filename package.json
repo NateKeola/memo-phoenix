@@ -11,9 +11,13 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "db:push": "supabase db push"
+    "db:push": "supabase db push",
+    "prompts:generate": "node packages/miner-core/scripts/generate-prompts.mjs",
+    "miner": "tsx packages/miner-core/src/cli.ts",
+    "seed": "tsx packages/miner-core/src/seed.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.2",
     "@memo/miner-core": "*",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.45.0",
@@ -28,6 +32,7 @@
     "@types/react-dom": "^19.0.0",
     "eslint": "^8.57.0",
     "eslint-config-next": "^15.1.0",
+    "tsx": "^4.22.4",
     "typescript": "^5.7.0"
   }
 }
