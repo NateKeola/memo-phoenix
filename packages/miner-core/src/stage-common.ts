@@ -212,9 +212,23 @@ export function round3(n: number): number {
 // whose content actually changed, so canonical_history captures real changes,
 // not full-table churn.
 
-type ExistingSig = { id: string; sig: string }
+type ExistingSig = { change: string; full: string }
 
-function signature(row: {
+// Change-detection keys ONLY on the meaningful resolution: the provenance set
+// (which raw claims support the node) and the temporal class. The synthesized and
+// cosmetic fields (summary, data wording, confidence, salience, label casing) are
+// deliberately excluded. The LLM rewords those on every re-resolution, and letting
+// that count as a "change" rewrites every row and floods canonical_history with
+// churn. A row updates only when its claims or classification actually change,
+// which is exactly when its summary should be re-synthesized anyway.
+function changeSignature(row: { source_claim_ids: string[]; temporality: string }): string {
+  return canonicalJson({ source_claim_ids: [...row.source_claim_ids].sort(), temporality: row.temporality })
+}
+
+// The full row signature (every persisted field). Used ONLY for the optional
+// MINER_CHURN_DEBUG A/B counter, to report how much churn the old full signature
+// would have produced versus the provenance-keyed signature.
+function fullSignature(row: {
   label: string | null
   data: Record<string, unknown>
   source_claim_ids: string[]
@@ -250,9 +264,10 @@ export async function writeCanonical(
   }>
 ): Promise<{ inserted: number; updated: number; unchanged: number }> {
   if (rows.length === 0) return { inserted: 0, updated: 0, unchanged: 0 }
+  const debug = process.env.MINER_CHURN_DEBUG === '1'
 
   const ids = rows.map((r) => r.id)
-  const existing = new Map<string, string>()
+  const existing = new Map<string, ExistingSig>()
   // chunk the existence read so a large id set never overflows the query
   for (let i = 0; i < ids.length; i += 500) {
     const chunk = ids.slice(i, i + 500)
@@ -264,32 +279,41 @@ export async function writeCanonical(
       .in('id', chunk)
     if (error) throw new Error(`[miner] read-existing ${table}: ${error.message}`)
     for (const e of (data ?? []) as ExistingRow[]) {
-      existing.set(String(e.id), signature(normalizeExisting(e)))
+      const n = normalizeExisting(e)
+      existing.set(String(e.id), { change: changeSignature(n), full: fullSignature(n) })
     }
   }
 
   let inserted = 0
   let updated = 0
   let unchanged = 0
+  let fullWouldWrite = 0 // MINER_CHURN_DEBUG: what the old full signature would rewrite
   const toWrite: typeof rows = []
   for (const r of rows) {
-    const sig = signature(r)
     const prev = existing.get(r.id)
     if (prev === undefined) {
       inserted++
       toWrite.push(r)
-    } else if (prev !== sig) {
+    } else if (prev.change !== changeSignature(r)) {
       updated++
       toWrite.push(r)
     } else {
       unchanged++
     }
+    if (debug && (prev === undefined || prev.full !== fullSignature(r))) fullWouldWrite++
   }
 
   for (let i = 0; i < toWrite.length; i += 500) {
     const chunk = toWrite.slice(i, i + 500)
     const { error } = await admin().from(table).upsert(chunk, { onConflict: 'id' })
     if (error) throw new Error(`[miner] upsert ${table}: ${error.message}`)
+  }
+
+  if (debug) {
+    console.log(
+      `[churn] ${table}: provenance-sig writes=${toWrite.length} ` +
+        `(ins ${inserted}/upd ${updated}/unchanged ${unchanged}); old full-sig would write=${fullWouldWrite}`
+    )
   }
   return { inserted, updated, unchanged }
 }
