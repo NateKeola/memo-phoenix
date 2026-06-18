@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { CaptureMenu } from '@/components/capture-menu'
 
 export default async function HomePage() {
   const supabase = await createClient()
@@ -17,6 +18,7 @@ export default async function HomePage() {
     <main style={{ padding: 24, fontFamily: 'system-ui, sans-serif' }}>
       <h1>Memo Phoenix</h1>
       <p>Signed in as {user.email}</p>
+      <CaptureMenu />
       <form action="/auth/signout" method="post">
         <button type="submit">Sign out</button>
       </form>
