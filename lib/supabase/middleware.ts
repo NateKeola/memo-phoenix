@@ -34,7 +34,9 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   const path = request.nextUrl.pathname
-  const isPublic = path === '/login' || path.startsWith('/auth')
+  // /api routes self-handle auth and return JSON status (401), so don't redirect
+  // them to /login; the session is still refreshed above for the route handler.
+  const isPublic = path === '/login' || path.startsWith('/auth') || path.startsWith('/api')
 
   if (!user && !isPublic) {
     const url = request.nextUrl.clone()
