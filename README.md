@@ -51,3 +51,22 @@ Set the Vercel project environment variables (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_
 ## Single-user lock
 
 This is not a public app. The real control is on the remote Supabase project: disable signups (dashboard or Management API) after the single user account is created. The app ships only a `/login` page (no signup UI), and FORCE RLS means any other account would see zero rows. Create the account first, then disable signups.
+
+## Interview agent (PR3)
+
+The "Start interview" path opens a voice conversation with Memo in two modes that share one system prompt (the bible at `packages/miner-core/prompts/memo-companion-bible.md`, bundled to `lib/interview/bible.generated.ts` via `npm run bible:generate`):
+
+- **Open brain-dump** — bible only, blank slate, available any time.
+- **Daily check-in** — a deterministic briefing (`lib/interview/briefing.ts`) reads your canonical graph and composes a short brief (recent threads, open follow-ups, plus a couple of stubbed resurfacing items), injected alongside the bible.
+
+The conversation runs on ElevenLabs Conversational AI. The signed URL is minted server-side (`/api/interview/start`), so `ELEVENLABS_API_KEY` never reaches the browser; the per-session system prompt + first message are applied client-side via `conversation_config_override`. On end (`/api/interview/end`), the authoritative transcript is fetched from ElevenLabs and written as one `mode='interview'` capture, which the miner folds into the graph on its next run.
+
+### Required one-time ElevenLabs dashboard step
+
+`conversation_config_override` only works if the agent permits overrides. Overrides are disabled by default, and an override sent for a non-enabled field throws an error (the conversation fails to start), so this is not optional:
+
+1. Open your agent in the ElevenLabs dashboard.
+2. Go to the agent's **Security** tab.
+3. Enable the override toggles for **System prompt** and **First message**.
+
+Set `NEXT_PUBLIC_ELEVENLABS_AGENT_ID` to that agent's id and `MEMO_USER_NAME` to your name (used in the bible).
