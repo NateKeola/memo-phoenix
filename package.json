@@ -13,11 +13,14 @@
     "typecheck": "tsc --noEmit",
     "db:push": "supabase db push",
     "prompts:generate": "node packages/miner-core/scripts/generate-prompts.mjs",
+    "bible:generate": "node scripts/generate-bible.mjs",
     "miner": "tsx packages/miner-core/src/cli.ts",
     "seed": "tsx packages/miner-core/src/seed.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",
+    "@elevenlabs/client": "^1.11.2",
+    "@elevenlabs/react": "^1.6.8",
     "@memo/miner-core": "*",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.45.0",
