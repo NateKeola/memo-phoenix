@@ -12,6 +12,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "db:push": "supabase db push",
+    "db:status": "node scripts/db.mjs status",
+    "db:apply": "node scripts/db.mjs apply",
     "prompts:generate": "node packages/miner-core/scripts/generate-prompts.mjs",
     "bible:generate": "node scripts/generate-bible.mjs",
     "miner": "tsx packages/miner-core/src/cli.ts",
