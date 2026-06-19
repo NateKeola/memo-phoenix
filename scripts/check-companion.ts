@@ -1,16 +1,15 @@
-// Offline checks for the companion core (no model call, no external send, so it
-// runs under the current Anthropic usage limit and never touches Gmail/Calendar).
-// It exercises the DETERMINISTIC today selection against the real graph, unit-tests
-// the bucketing, and STRUCTURALLY asserts the safety boundary: the model-drafting
-// path cannot send, and the send path is code-gated and model-free.
-//
-// companion_state / google_connections / companion_actions land on merge (migrate
-// on merge to main), so getToday degrades to no overlay here; that is expected.
+// Offline checks for the revised (conversational) companion. No model call and no
+// external send, so it runs under the current usage limit. It asserts the sending
+// layer is gone, unit-tests the label-drift overlay re-match and the relationship
+// heuristic, exercises getToday against the real graph, and confirms the brainstorm
+// is server-side.
 //
 // Run: npx tsx scripts/check-companion.ts
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
 import { bucketOf, getToday } from '../lib/companion/today'
+import { matchOverlay, type CommitmentRef, type OverlayRow } from '../lib/companion/overlay'
+import { closenessWeight, relationshipNudges } from '../lib/companion/nudges'
 
 for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
   const m = line.match(/^([A-Z0-9_]+)=(.*)$/)
@@ -32,63 +31,100 @@ function check(name: string, cond: boolean, detail = '') {
     console.log(`  FAIL ${name} ${detail}`)
   }
 }
-function read(path: string): string {
-  return readFileSync(path, 'utf8')
-}
+const read = (p: string) => readFileSync(p, 'utf8')
 
 async function main() {
-  const now = Date.parse('2026-06-18T12:00:00Z')
+  const now = Date.parse('2026-06-19T12:00:00Z')
 
-  console.log('== bucketOf (deterministic, best-effort over free-text dues) ==')
-  check('elapsed snooze resurfaces as overdue', bucketOf('whenever', '2026-06-17T00:00:00Z', now) === 'overdue')
-  check('future snooze does not force overdue', bucketOf('tomorrow', '2026-07-01T00:00:00Z', now) === 'soon')
-  check('"tomorrow" is soon', bucketOf('tomorrow', null, now) === 'soon')
-  check('"yesterday" is overdue', bucketOf('yesterday', null, now) === 'overdue')
-  check('past ISO date is overdue', bucketOf('by 2025-01-10', null, now) === 'overdue')
-  check('far ISO date is open', bucketOf('2027-01-10', null, now) === 'open')
-  check('unknown free text is open', bucketOf('in a couple weeks', null, now) === 'open')
-  check('no due is open', bucketOf(null, null, now) === 'open')
+  console.log('== sending layer is gone (deferred to a later connectors build) ==')
+  for (const f of [
+    'lib/google/gmail.ts',
+    'lib/google/calendar.ts',
+    'lib/google/oauth.ts',
+    'lib/google/connection.ts',
+    'lib/companion/draft.ts',
+    'app/api/google/connect/route.ts',
+  ]) {
+    check(`${f} no longer exists`, !existsSync(f))
+  }
+  const actionsSrc = read('app/companion/actions.ts')
+  check('actions.ts has no email/calendar send action', !/sendEmail|createEvent|draftEmail|draftCalendar|sendGmail/.test(actionsSrc))
+  const viewSrc = read('components/companion/companion-view.tsx')
+  check('companion view has no gmail/calendar/connect UI', !/gmail|calendar|google\/connect|Send email|Create event/i.test(viewSrc))
+  const migration = read('supabase/migrations/0011_companion_conversational.sql')
+  check('migration drops google_connections', /drop table if exists public\.google_connections/.test(migration))
+  check('migration drops companion_actions', /drop table if exists public\.companion_actions/.test(migration))
+  check('migration adds the overlay match columns', /add column if not exists match_label/.test(migration) && /add column if not exists match_person_id/.test(migration))
 
-  console.log('\n== getToday against the live graph (overlay degrades, expected) ==')
+  console.log('\n== label-drift overlay re-match (the fix) ==')
+  {
+    // a commitment that re-resolved under a NEW id after its label drifted
+    const drifted: CommitmentRef = { id: 'NEW_ID_AAA', label: 'Have dinner with Todd', personId: 'P_TODD' }
+    const overlayFromBefore: OverlayRow = {
+      commitment_id: 'OLD_ID_ZZZ', // the pre-drift id, no longer a current commitment
+      state: 'done',
+      snooze_until: null,
+      match_label: 'Get dinner with Todd',
+      match_person_id: 'P_TODD',
+    }
+    const m = matchOverlay([drifted], [overlayFromBefore])
+    check('drifted commitment re-matches its overlay (state survives drift)', m.get('NEW_ID_AAA')?.state === 'done')
+
+    const exact: CommitmentRef = { id: 'SAME', label: 'whatever', personId: null }
+    const exactOverlay: OverlayRow = { commitment_id: 'SAME', state: 'snoozed', snooze_until: null, match_label: 'x', match_person_id: null }
+    check('exact id still matches', matchOverlay([exact], [exactOverlay]).get('SAME')?.state === 'snoozed')
+
+    const wrongPerson: OverlayRow = { commitment_id: 'OLD2', state: 'done', snooze_until: null, match_label: 'Have dinner with Todd', match_person_id: 'P_SOMEONE_ELSE' }
+    check('person disagreement blocks a fuzzy match', matchOverlay([drifted], [wrongPerson]).get('NEW_ID_AAA') === undefined)
+
+    const unrelated: OverlayRow = { commitment_id: 'OLD3', state: 'done', snooze_until: null, match_label: 'buy a new surfboard', match_person_id: null }
+    check('an unrelated label does not falsely match', matchOverlay([drifted], [unrelated]).get('NEW_ID_AAA') === undefined)
+
+    const noSignature: OverlayRow = { commitment_id: 'OLD4', state: 'done', snooze_until: null, match_label: null, match_person_id: null }
+    check('overlay without a stored signature cannot fuzzy-match (no false positive)', matchOverlay([drifted], [noSignature]).get('NEW_ID_AAA') === undefined)
+
+    // person-less matches need MUCH stronger label agreement (the review fix)
+    const giftCommit: CommitmentRef = { id: 'G1', label: 'buy birthday gift', personId: null }
+    const giftOverlay: OverlayRow = { commitment_id: 'OLDG', state: 'done', snooze_until: null, match_label: 'buy holiday gift', match_person_id: null }
+    check('person-less weak overlap (Jaccard 0.5) NO LONGER carries state across items', matchOverlay([giftCommit], [giftOverlay]).get('G1') === undefined)
+    const gymCommit: CommitmentRef = { id: 'GY1', label: 'Renew gym membership', personId: null }
+    const gymOverlay: OverlayRow = { commitment_id: 'OLDGY', state: 'snoozed', snooze_until: null, match_label: 'Renew the gym membership', match_person_id: null }
+    check('person-less STRONG overlap still re-matches', matchOverlay([gymCommit], [gymOverlay]).get('GY1')?.state === 'snoozed')
+  }
+
+  console.log('\n== relationship heuristic ==')
+  check('best friend scores high', closenessWeight({ label: 'Cole', closeness: 'best buddy', relationship: 'best friend' }) === 3)
+  check('family scores high', closenessWeight({ label: 'Mom', closeness: '', relationship: 'mother' }) === 3)
+  check('acquaintance is not nudged (weight 0)', closenessWeight({ label: 'X', closeness: 'acquaintance', relationship: 'acquaintance' }) === 0)
+  check('a pure work tie (business partner) is not nudged', closenessWeight({ label: 'Sam', closeness: '', relationship: 'business partner' }) === 0)
+  check('a relationship keyword in the NAME is not read as closeness', closenessWeight({ label: 'Brother Lee', closeness: '', relationship: 'acquaintance' }) === 0)
+  const nudges = await relationshipNudges({ supabase: svc, userId }, now)
+  console.log(`  surfaced ${nudges.length} relationship nudge(s):`)
+  for (const n of nudges) console.log(`   - ${n.name} | ${n.suggestion}`)
+  check('relationship nudges return close people with a plain-language suggestion', nudges.length >= 1 && nudges.every((n) => n.suggestion.length > 10))
+  check('every nudge is about a person who clearly matters (not an acquaintance)', nudges.every((n) => n.name))
+
+  console.log('\n== getToday against the live graph (phrased follow-ups) ==')
   const today = await getToday({ supabase: svc, userId }, now)
   console.log('  counts:', JSON.stringify(today.counts))
-  console.log(`  overdue ${today.overdue.length} / soon ${today.soon.length} / open ${today.open.length} / snoozed ${today.snoozed.length} / events ${today.upcomingEvents.length}`)
   const sample = [...today.overdue, ...today.soon, ...today.open].slice(0, 4)
-  for (const f of sample) console.log(`   - [${f.bucket}] ${f.label} | for ${f.person?.label ?? 'none'} | due ${f.due ?? 'n/a'} | ${f.provenance ?? 'no provenance'}`)
-  check('today surfaced at least one open commitment from the real graph', today.counts.active >= 1)
-  check('every surfaced item carries provenance or a clear null', sample.every((f) => 'provenance' in f))
+  for (const f of sample) console.log(`   - [${f.bucket}] ${f.headline} :: ${f.suggestion} | ${f.provenance ?? 'no prov'}`)
+  check('today surfaces at least one phrased follow-up', today.counts.active >= 1)
+  check('every follow-up has a plain-language suggestion (not a raw readout)', sample.every((f) => f.suggestion.toLowerCase().startsWith('you said')))
+  check('relationship nudges are part of the surface', today.counts.nudges >= 1)
   check('done/dismissed are never surfaced as active', [...today.overdue, ...today.soon, ...today.open].every((f) => f.status !== 'done' && f.status !== 'dismissed'))
 
-  console.log('\n== SAFETY BOUNDARY: drafting cannot send; sending is code-gated and model-free ==')
-  const draftSrc = read('lib/companion/draft.ts')
-  check('draft.ts does not import gmail', !/google\/gmail/.test(draftSrc))
-  check('draft.ts does not import calendar', !/google\/calendar/.test(draftSrc))
-  check('draft.ts does not import the connection/token module', !/google\/connection/.test(draftSrc))
+  console.log('\n== bucketOf (unchanged, free-text best-effort) ==')
+  check('elapsed snooze resurfaces as overdue', bucketOf('whenever', '2026-06-18T00:00:00Z', now) === 'overdue')
+  check('"tomorrow" is soon', bucketOf('tomorrow', null, now) === 'soon')
+  check('unknown free text is open', bucketOf('in a couple weeks', null, now) === 'open')
 
-  const actionsSrc = read('app/companion/actions.ts')
-  const sendBlock = actionsSrc.slice(actionsSrc.indexOf('export async function sendEmailAction'))
-  const emailFn = sendBlock.slice(0, sendBlock.indexOf('export async function createEventAction'))
-  const eventFn = sendBlock.slice(sendBlock.indexOf('export async function createEventAction'))
-  check('sendEmailAction requires explicit confirm', /input\.confirm !== true/.test(emailFn))
-  check('createEventAction requires explicit confirm', /input\.confirm !== true/.test(eventFn))
-  check('sendEmailAction never calls the drafting model', !/draftEmail|draftCalendar/.test(emailFn))
-  check('createEventAction never calls the drafting model', !/draftEmail|draftCalendar/.test(eventFn))
-  check('send path goes through the Gmail helper', /sendGmail\(/.test(emailFn))
-  check('create path goes through the Calendar helper', /createCalendarEvent\(/.test(eventFn))
-  check('send/create require a live access token (connection gate)', /getValidAccessToken/.test(emailFn) && /getValidAccessToken/.test(eventFn))
-
-  console.log('\n== token isolation: tokens are server-only ==')
-  const connSrc = read('lib/google/connection.ts')
-  check('connection.ts is server-only', /^import 'server-only'/.test(connSrc))
-  check('google_connections is only touched via the admin (service-role) client', /createAdminClient/.test(connSrc))
-  const migration = read('supabase/migrations/0010_companion.sql')
-  // isolate just the google_connections statements (from its CREATE TABLE to the
-  // next CREATE TABLE) so the assertion is not fooled by other tables' policies.
-  const gcStart = migration.indexOf('create table public.google_connections')
-  const gcEnd = migration.indexOf('create table public.companion_actions')
-  const gcBlock = migration.slice(gcStart, gcEnd)
-  check('google_connections has FORCE RLS', /force row level security/.test(gcBlock))
-  check('google_connections has NO policies (service-role only)', !/create policy/.test(gcBlock))
+  console.log('\n== brainstorm is server-side and does not send ==')
+  check('brainstorm route exists', existsSync('app/api/companion/brainstorm/route.ts'))
+  const brainstormSrc = read('lib/companion/brainstorm.ts')
+  check('brainstorm prompt states it cannot send', /do NOT send|cannot: you brainstorm|never send/i.test(brainstormSrc))
+  check('brainstorm route runs server-side (runtime nodejs, reuses runChat)', /runtime = 'nodejs'/.test(read('app/api/companion/brainstorm/route.ts')) && /runChat/.test(read('app/api/companion/brainstorm/route.ts')))
+  check('runChat accepts a systemPrompt override', /systemPrompt\?: string/.test(read('lib/chat/agent.ts')))
 
   console.log(`\n${pass} passed, ${fail} failed`)
   if (fail > 0) process.exit(1)

@@ -71,19 +71,15 @@ The conversation runs on ElevenLabs Conversational AI. The signed URL is minted 
 
 Set `NEXT_PUBLIC_ELEVENLABS_AGENT_ID` to that agent's id and `MEMO_USER_NAME` to your name (used in the bible).
 
-## Companion: today and draft-and-confirm actions (PR7)
+## Companion: conversational follow-ups (`/companion`)
 
-The "Today" surface (`/companion`) reads your open commitments and due items from the graph with deterministic queries (no model call), grouped overdue / soon / open, with provenance. You can mark an item done, snooze it, or dismiss it; that state lives in `companion_state` (a mutable overlay), never in canonical, so it survives a miner run.
+The "Follow-ups" surface reads your open commitments and the people who matter to you from the graph with deterministic queries (no model call), and nudges you, in plain language, to stay connected:
 
-For a follow-up that needs reaching someone, Memo drafts a Gmail message or a Calendar invite for you to review and edit. Nothing sends until you click send: drafting and sending are separate actions, the send is gated in code behind an explicit confirmation and a live connection, and the send path never calls the model. Autonomous send is not built.
+- **Commitment follow-ups** grouped overdue / soon / open, each phrased as a suggestion to act ("you said you'd go spearfishing with Kolton, in a couple weeks"), with provenance.
+- **Relationship nudges**: close people you have not brought up much, from a simple transparent recency heuristic (closeness weight, then least-recently-mentioned, then fewest mentions). The real decay-and-salience scoring is the freshness loop, a later PR.
 
-### Required one-time Google setup
+From any nudge you can open a short **brainstorm** with Memo to think it through ("what should I get my mom"). Memo has your graph via the retrieval tools and suggests small real-life next steps and text you can copy. It does not send anything: suggestions point you to act in your own life.
 
-Email and calendar actions use the user's connected Google account. Without it the Today view still works and prompts you to connect.
+Mark a follow-up done, snooze it, or dismiss it; that state lives in `companion_state` (a mutable overlay), never in canonical, so it survives a miner run. The overlay is label-drift resilient: it stores a stable signature (label plus person) and re-matches a commitment that re-resolved under a new id, so your done/snooze state is not lost when a label drifts.
 
-1. In the Google Cloud Console, create an OAuth 2.0 **Web application** client.
-2. Add the authorized redirect URI `<your-app-origin>/api/google/callback` (for local dev `http://localhost:3000/api/google/callback`, plus your Vercel URL).
-3. Enable the **Gmail API** and **Google Calendar API** on the project.
-4. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (server-side only).
-
-Scopes requested are least privilege: `gmail.send` (send only, cannot read mail) and `calendar.events`. Tokens are stored server-side in `google_connections` and never reach the browser. Click "Connect Google" on the Today page to authorize.
+Sending email or creating calendar events (with Google OAuth and single sign-on) is deferred to a later settings/connectors build.
