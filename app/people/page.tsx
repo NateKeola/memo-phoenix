@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { listPeople } from '@/lib/people'
+import { ContextAdder } from '@/components/context-adder'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,9 +28,13 @@ export default async function PeoplePage() {
       </p>
       <ul style={{ listStyle: 'none', padding: 0, display: 'grid', gap: 6 }}>
         {people.map((p) => (
-          <li key={p.id} style={{ border: '1px solid #eee', borderRadius: 8, padding: '10px 12px' }}>
-            <Link href={`/people/${p.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+          <li
+            key={p.id}
+            style={{ border: '1px solid #eee', borderRadius: 8, padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}
+          >
+            <Link href={`/people/${p.id}`} style={{ textDecoration: 'none', color: 'inherit', flex: 1 }}>
               <strong>{p.name ?? '(unnamed)'}</strong>
+              {p.pendingRename ? <span style={{ color: '#b07a14', fontSize: 12 }}> (rename pending next sync)</span> : null}
               {p.relationship ? <span style={{ color: '#555' }}> ({p.relationship})</span> : null}
               {p.work_or_personal ? (
                 <span
@@ -51,6 +56,14 @@ export default async function PeoplePage() {
                 </span>
               ) : null}
             </Link>
+            <ContextAdder
+              targetKind="person"
+              targetId={p.id}
+              label={p.name ?? 'this person'}
+              source="people_list"
+              showInterview
+              compact
+            />
           </li>
         ))}
       </ul>

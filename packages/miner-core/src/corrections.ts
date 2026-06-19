@@ -13,7 +13,7 @@
 // id. The existing same-id collapse in the people pass then unions provenance and
 // aliases. The stale pre-correction row (the "loser") is superseded by the miner.
 import { admin } from './supabase'
-import { canonicalId, canonicalJson, normalizeLabel, sha256 } from './identity'
+import { canonicalJson, canonicalPersonId, normalizeLabel, sha256, splitName } from './identity'
 
 const PEOPLE_TABLE = 'canonical_people'
 const PEOPLE_KINDS = ['rename_person', 'merge_people']
@@ -113,10 +113,16 @@ export function buildPeopleRewrite(userId: string, corrections: CorrectionRow[])
   const labelToFinal = new Map<string, string>()
   for (const fromNorm of edge.keys()) labelToFinal.set(fromNorm, resolveFinal(fromNorm))
 
+  // Compute loser/survivor ids through the SAME first+last identity helper the
+  // people pass uses (lockstep), so a rename's supersession targets the exact id
+  // the people pass mints. A single-token rename ("Karalea") becomes
+  // first="Karalea", last="".
   const loserToSurvivor = new Map<string, string>()
   for (const [fromNorm, finalLabel] of labelToFinal) {
-    const loserId = canonicalId(userId, PEOPLE_TABLE, fromNorm)
-    const survivorId = canonicalId(userId, PEOPLE_TABLE, finalLabel)
+    const lf = splitName(fromNorm)
+    const sf = splitName(finalLabel)
+    const loserId = canonicalPersonId(userId, lf.first, lf.last)
+    const survivorId = canonicalPersonId(userId, sf.first, sf.last)
     if (loserId !== survivorId) loserToSurvivor.set(loserId, survivorId)
   }
 

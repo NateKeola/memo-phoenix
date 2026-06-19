@@ -1,4 +1,4 @@
-import { canonicalId, normalizeLabel } from './identity'
+import { canonicalId, canonicalPersonId, normalizeLabel, splitName } from './identity'
 import {
   buildPeopleRewrite,
   readPeopleCorrections,
@@ -138,8 +138,14 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
     const nodeAliases = uniqueStrings(node.aliases)
     // keep the original surface form as an alias so the correction is self-stable
     if (normalizeLabel(rawName) !== normalizeLabel(name)) nodeAliases.push(rawName)
-    const id = canonicalId(userId, cfg.canonicalTable, name)
-    const nodeData = (node.data && typeof node.data === 'object' ? (node.data as Record<string, unknown>) : {})
+    // People are identified by first + last name (last may be empty). The id is
+    // built from first+last, which reconstructs the label for a token-split, so
+    // existing person ids are preserved while the basis becomes first+last.
+    const isPeople = cfg.canonicalTable === 'canonical_people'
+    const split = isPeople ? splitName(name) : null
+    const id = split ? canonicalPersonId(userId, split.first, split.last) : canonicalId(userId, cfg.canonicalTable, name)
+    const rawData = (node.data && typeof node.data === 'object' ? (node.data as Record<string, unknown>) : {})
+    const nodeData = split ? { ...rawData, first_name: split.first, last_name: split.last } : rawData
     const existing = byId.get(id)
     if (existing) {
       // two surface forms normalized to the same id (a merge, or just casing): union
