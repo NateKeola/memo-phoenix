@@ -86,7 +86,7 @@ function project(type: CanonicalType, row: Row) {
   // Validity-aware (spec §3): a superseded row is past; a current decaying row that
   // has faded and not been confirmed in a while is still current but should be
   // spoken of "as of" its last confirmation, not asserted as present fact.
-  let validity: Record<string, unknown>
+  let validity: { current: boolean; aged?: boolean; as_of?: string | null }
   if (row.valid_to !== null) {
     validity = { current: false, as_of: fmtDate(row.valid_to) }
   } else if (isAged(fresh, now)) {
