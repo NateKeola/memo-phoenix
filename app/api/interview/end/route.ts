@@ -20,6 +20,8 @@ export async function POST(request: NextRequest) {
     sessionId?: string
     conversationId?: string
     transcript?: string
+    targetKind?: string
+    targetId?: string
   }
   if (!body.sessionId) return NextResponse.json({ error: 'missing sessionId' }, { status: 400 })
 
@@ -84,6 +86,9 @@ export async function POST(request: NextRequest) {
       modality: 'voice',
       body: transcript,
       interview_id: body.sessionId,
+      // capture-with-target: a person/topic interview attaches to its target
+      target_kind: body.targetKind === 'person' || body.targetKind === 'topic' ? body.targetKind : null,
+      target_id: body.targetKind === 'person' && typeof body.targetId === 'string' ? body.targetId : null,
     })
     .select('id')
     .single()

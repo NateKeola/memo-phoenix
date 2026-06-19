@@ -41,9 +41,23 @@ function Interview() {
   const convIdRef = useRef<string | null>(null)
   const linesRef = useRef<Line[]>([])
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // capture-with-target: a person/topic interview reads its target from the URL
+  // and carries it into the end-of-session capture.
+  const targetKindRef = useRef<string | null>(null)
+  const targetIdRef = useRef<string | null>(null)
+  const [target, setTarget] = useState<{ kind: 'person' | 'topic'; id?: string; seed?: string; label?: string } | null>(null)
 
   useEffect(() => () => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current)
+  }, [])
+
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search)
+    const t = sp.get('target')
+    const id = sp.get('id')
+    const seed = sp.get('seed')
+    if (t === 'person' && id) setTarget({ kind: 'person', id, label: sp.get('label') ?? undefined })
+    else if (t === 'topic' && seed) setTarget({ kind: 'topic', seed })
   }, [])
 
   const conversation = useConversation({
@@ -102,7 +116,10 @@ function Interview() {
         const res = await fetch('/api/interview/start', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ mode: m }),
+          body: JSON.stringify({
+            mode: m,
+            target: target ? { kind: target.kind, id: target.id, seed: target.seed } : undefined,
+          }),
         })
         const cfg = (await res.json()) as {
           sessionId?: string
@@ -110,9 +127,13 @@ function Interview() {
           systemPrompt?: string
           firstMessage?: string
           error?: string
+          targetKind?: string | null
+          targetId?: string | null
         }
         if (!res.ok || !cfg.signedUrl) throw new Error(cfg.error || 'could not start interview')
         sessionIdRef.current = cfg.sessionId ?? null
+        targetKindRef.current = cfg.targetKind ?? null
+        targetIdRef.current = cfg.targetId ?? null
 
         try {
           // overrides require the agent's dashboard override toggles to be ON;
@@ -139,7 +160,7 @@ function Interview() {
         setPhase('error')
       }
     },
-    [conversation]
+    [conversation, target]
   )
 
   const end = useCallback(async () => {
@@ -157,6 +178,8 @@ function Interview() {
           sessionId: sessionIdRef.current,
           conversationId: convIdRef.current,
           transcript: linesRef.current.map((l) => `${l.role}: ${l.text}`).join('\n'),
+          targetKind: targetKindRef.current,
+          targetId: targetIdRef.current,
         }),
       })
       const j = (await res.json()) as { captured?: boolean; transcriptLength?: number; error?: string }
@@ -172,10 +195,21 @@ function Interview() {
   return (
     <div>
       {phase === 'choose' ? (
-        <div style={{ display: 'grid', gap: 12, maxWidth: 360 }}>
-          <button type="button" onClick={() => start('open')}>Open brain-dump</button>
-          <button type="button" onClick={() => start('daily')}>Daily check-in (graph-aware)</button>
-        </div>
+        target ? (
+          <div style={{ display: 'grid', gap: 12, maxWidth: 420 }}>
+            <p>
+              {target.kind === 'person'
+                ? `An interview to add context about ${target.label ?? 'this person'}.`
+                : 'An interview to go deeper on what you were exploring.'}
+            </p>
+            <button type="button" onClick={() => start('daily')}>Start interview</button>
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 12, maxWidth: 360 }}>
+            <button type="button" onClick={() => start('open')}>Open brain-dump</button>
+            <button type="button" onClick={() => start('daily')}>Daily check-in (graph-aware)</button>
+          </div>
+        )
       ) : null}
 
       {phase === 'connecting' ? <p>Connecting{mode === 'daily' ? ' (composing your brief)' : ''}...</p> : null}

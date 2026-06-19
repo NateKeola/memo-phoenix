@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useRef, useState } from 'react'
 
 type Msg = { role: 'user' | 'assistant'; content: string }
@@ -109,6 +110,25 @@ export function Chat() {
       </div>
 
       {error ? <p style={{ color: 'crimson', margin: 0 }}>{error}</p> : null}
+
+      {(() => {
+        // After an answer, the user can go deeper in a voice interview seeded with
+        // the chat topic (the chat-to-interview spin-up). The seed is the last
+        // question; the interview captures itself and deepens the graph.
+        const lastUser = [...messages].reverse().find((m) => m.role === 'user')?.content
+        const hasAnswer = messages.some((m) => m.role === 'assistant' && m.content.trim())
+        if (!busy && lastUser && hasAnswer) {
+          const href = `/capture/interview?${new URLSearchParams({ target: 'topic', seed: lastUser.slice(0, 400) }).toString()}`
+          return (
+            <p style={{ margin: 0 }}>
+              <Link href={href} style={{ color: '#b07a14', fontSize: 14 }}>
+                Talk more about this in an interview &rarr;
+              </Link>
+            </p>
+          )
+        }
+        return null
+      })()}
 
       <div style={{ display: 'flex', gap: 8 }}>
         <textarea

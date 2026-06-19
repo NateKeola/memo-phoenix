@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { composeBrief, type Brief } from '@/lib/interview/briefing'
+import { composeBrief, composePersonBrief, composeTopicBrief, type Brief } from '@/lib/interview/briefing'
 import { composeSystemPrompt, firstMessage } from '@/lib/interview/compose'
 import { getSignedUrl } from '@/lib/elevenlabs'
 import { logEvent } from '@/lib/telemetry'
@@ -18,13 +18,36 @@ export async function POST(request: NextRequest) {
   } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
 
-  const body = (await request.json().catch(() => ({}))) as { mode?: string }
-  const mode: 'open' | 'daily' = body.mode === 'daily' ? 'daily' : 'open'
+  const body = (await request.json().catch(() => ({}))) as {
+    mode?: string
+    target?: { kind?: string; id?: string; seed?: string }
+  }
+  const target = body.target
+  let mode: 'open' | 'daily' = body.mode === 'daily' ? 'daily' : 'open'
 
-  // Daily mode reads the user's graph (RLS-scoped) and composes a brief in code.
+  // The brief is the injection seed. A daily interview scans the graph; a targeted
+  // interview (capture-with-target) seeds the same DAILY_BRIEF slot with a specific
+  // person or chat topic, so the conversation aims at building context on it.
   let brief: Brief = { items: [], text: '', itemCount: 0, resurfacingStub: false }
   let briefError = false
-  if (mode === 'daily') {
+  let targetKind: 'person' | 'topic' | null = null
+  let targetId: string | null = null
+
+  if (target?.kind === 'person' && typeof target.id === 'string' && target.id.trim()) {
+    targetKind = 'person'
+    targetId = target.id.trim()
+    mode = 'daily'
+    try {
+      brief = await composePersonBrief(supabase, user.id, targetId)
+    } catch (err) {
+      console.error('[interview/start] person brief failed:', err)
+      briefError = true
+    }
+  } else if (target?.kind === 'topic' && typeof target.seed === 'string' && target.seed.trim()) {
+    targetKind = 'topic'
+    mode = 'daily'
+    brief = composeTopicBrief(target.seed)
+  } else if (mode === 'daily') {
     try {
       brief = await composeBrief(supabase)
     } catch (err) {
@@ -75,6 +98,8 @@ export async function POST(request: NextRequest) {
       brief_item_count: brief.itemCount,
       degraded: mode === 'daily' && !hasBrief,
       brief_error: briefError,
+      target_kind: targetKind,
+      target_id: targetId,
     },
   })
 
@@ -90,5 +115,8 @@ export async function POST(request: NextRequest) {
     systemPrompt,
     firstMessage: first,
     briefItemCount: brief.itemCount,
+    // echoed back so the client carries the target into the end-of-session capture
+    targetKind,
+    targetId,
   })
 }
