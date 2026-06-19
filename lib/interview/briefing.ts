@@ -116,3 +116,73 @@ function labelFor(i: BriefItem): string {
       return i.label
   }
 }
+
+// ---- targeted briefs (capture-with-target interviews) -----------------------
+// Reuse the briefing-injection mechanism (fill DAILY_BRIEF), but seed it at a
+// specific person or a chat topic instead of the daily graph scan. The resulting
+// interview aims the conversation at building context on the target.
+
+function strv(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v : null
+}
+
+// A brief that aims the conversation at deepening context on one person.
+export async function composePersonBrief(supabase: SupabaseClient, userId: string, personId: string): Promise<Brief> {
+  const { data: person } = await supabase
+    .from('canonical_people')
+    .select('label, data, summary')
+    .eq('user_id', userId)
+    .eq('id', personId)
+    .is('valid_to', null)
+    .maybeSingle()
+  if (!person) return { items: [], text: '', itemCount: 0, resurfacingStub: false }
+  const p = person as { label: string | null; data: Record<string, unknown> | null; summary: string | null }
+  const d = p.data ?? {}
+  const name =
+    `${strv(d.first_name) ?? ''} ${strv(d.last_name) ?? ''}`.trim() || strv(p.label) || 'this person'
+
+  const { data: rels } = await supabase
+    .from('canonical_relationships')
+    .select('summary, data')
+    .eq('user_id', userId)
+    .is('valid_to', null)
+  const related = (rels ?? [])
+    .filter((r) => {
+      const rd = (r as { data: Record<string, unknown> | null }).data ?? {}
+      return rd.source_id === personId || rd.target_id === personId
+    })
+    .map((r) => strv((r as { summary: string | null }).summary))
+    .filter(Boolean)
+    .slice(0, 4)
+
+  const lines: string[] = []
+  lines.push(`This conversation is to deepen what you know about ${name}. Help the user add context, memories, and detail about them. Ask warm, specific questions and follow where they lead.`)
+  const known: string[] = []
+  if (strv(p.summary)) known.push(strv(p.summary) as string)
+  if (strv(d.relationship)) known.push(`Relationship: ${strv(d.relationship)}`)
+  if (related.length > 0) known.push(...related.map((s) => `Connected: ${s}`))
+  if (known.length > 0) {
+    lines.push('')
+    lines.push(`What you already know about ${name} (steer toward gently, never recite):`)
+    for (const k of known.slice(0, 6)) lines.push(`- ${k}`)
+  }
+  const text = lines.join('\n')
+  return {
+    items: [{ kind: 'target_person', label: name }],
+    text,
+    itemCount: 1,
+    resurfacingStub: false,
+  }
+}
+
+// A brief that aims the conversation at going deeper on a chat topic.
+export function composeTopicBrief(seed: string): Brief {
+  const topic = (seed ?? '').trim().slice(0, 500)
+  if (!topic) return { items: [], text: '', itemCount: 0, resurfacingStub: false }
+  const text = [
+    `This conversation is to go deeper on something the user was just exploring: ${topic}`,
+    '',
+    'Help them think it through and gather more context on the people and things involved. Ask specific, useful questions and let them talk.',
+  ].join('\n')
+  return { items: [{ kind: 'target_topic', label: topic }], text, itemCount: 1, resurfacingStub: false }
+}

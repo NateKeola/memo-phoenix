@@ -4,7 +4,10 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { FollowUp, Today, UpcomingEvent } from '@/lib/companion/today'
 import type { RelationshipNudge } from '@/lib/companion/nudges'
-import { setCommitmentState } from '@/app/companion/actions'
+import { setCommitmentState, setFollowupTracking } from '@/app/companion/actions'
+import { ContextAdder } from '@/components/context-adder'
+
+type PersonOpt = { id: string; name: string }
 
 // Warm, neutral placeholder palette (no purple). Temporary direction only; the
 // real styling is a V1 pass, so this is plain inline styling, not a theme layer.
@@ -30,18 +33,19 @@ export function CompanionView({ today }: { today: Today }) {
   const empty =
     today.counts.active === 0 && today.counts.snoozed === 0 && today.relationshipNudges.length === 0
 
+  const people = today.people
   return (
     <div style={{ color: INK }}>
-      <FollowUpGroup title="Overdue" items={today.overdue} />
-      <FollowUpGroup title="Soon" items={today.soon} />
-      <FollowUpGroup title="Open" items={today.open} />
+      <FollowUpGroup title="Overdue" items={today.overdue} people={people} />
+      <FollowUpGroup title="Soon" items={today.soon} people={people} />
+      <FollowUpGroup title="Open" items={today.open} people={people} />
 
       {today.relationshipNudges.length > 0 ? <Nudges nudges={today.relationshipNudges} /> : null}
 
       {today.snoozed.length > 0 ? (
         <details style={{ marginTop: 18 }}>
           <summary style={{ color: MUTED }}>Snoozed ({today.snoozed.length})</summary>
-          <FollowUpGroup title="" items={today.snoozed} />
+          <FollowUpGroup title="" items={today.snoozed} people={people} />
         </details>
       ) : null}
 
@@ -52,14 +56,14 @@ export function CompanionView({ today }: { today: Today }) {
   )
 }
 
-function FollowUpGroup({ title, items }: { title: string; items: FollowUp[] }) {
+function FollowUpGroup({ title, items, people }: { title: string; items: FollowUp[]; people: PersonOpt[] }) {
   if (items.length === 0) return null
   return (
     <section style={{ marginTop: 18 }}>
       {title ? <h2 style={{ fontSize: 15, color: ACCENT, margin: '0 0 8px' }}>{title}</h2> : null}
       <div style={{ display: 'grid', gap: 10 }}>
         {items.map((it) => (
-          <FollowUpCard key={it.commitmentId} item={it} />
+          <FollowUpCard key={it.commitmentId} item={it} people={people} />
         ))}
       </div>
     </section>
@@ -72,11 +76,36 @@ function Card({ children }: { children: React.ReactNode }) {
   )
 }
 
-function FollowUpCard({ item }: { item: FollowUp }) {
+function FollowUpCard({ item, people }: { item: FollowUp; people: PersonOpt[] }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [brainstorm, setBrainstorm] = useState(false)
+  const [planning, setPlanning] = useState(false)
+  const [dueDate, setDueDate] = useState(item.dueDate ? item.dueDate.slice(0, 10) : '')
+  const [linkedPersonId, setLinkedPersonId] = useState(item.linkedPerson?.id ?? '')
+
+  async function savePlan() {
+    if (busy) return
+    setBusy(true)
+    setErr('')
+    try {
+      const res = await setFollowupTracking({
+        commitmentId: item.commitmentId,
+        dueDate: dueDate || null,
+        linkedPersonId: linkedPersonId || null,
+        matchLabel: item.headline,
+        matchPersonId: item.person?.id ?? null,
+      })
+      if (!res.ok) throw new Error(res.error || 'could not save')
+      setPlanning(false)
+      router.refresh()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function changeState(state: 'done' | 'snoozed' | 'dismissed') {
     if (busy) return
@@ -101,11 +130,24 @@ function FollowUpCard({ item }: { item: FollowUp }) {
 
   const seed = `${item.headline}. ${item.suggestion}`
 
+  const planLabel = [
+    item.dueDate ? `planned ${item.dueDate.slice(0, 10)}` : null,
+    item.linkedPerson ? `with ${item.linkedPerson.name}` : null,
+  ]
+    .filter(Boolean)
+    .join(', ')
+
   return (
     <Card>
-      <div style={{ fontWeight: 600 }}>{item.headline}</div>
-      <div style={{ color: MUTED, fontSize: 14, marginTop: 2 }}>{item.suggestion}</div>
-      {item.provenance ? <div style={{ color: '#a59c86', fontSize: 12, marginTop: 2 }}>{item.provenance}</div> : null}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 600 }}>{item.headline}</div>
+          <div style={{ color: MUTED, fontSize: 14, marginTop: 2 }}>{item.suggestion}</div>
+          {planLabel ? <div style={{ color: ACCENT, fontSize: 12, marginTop: 2 }}>{planLabel}</div> : null}
+          {item.provenance ? <div style={{ color: '#a59c86', fontSize: 12, marginTop: 2 }}>{item.provenance}</div> : null}
+        </div>
+        <ContextAdder targetKind="commitment" targetId={item.commitmentId} label={item.headline} source="follow_up" compact />
+      </div>
 
       <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
         <button type="button" style={btn} onClick={() => changeState('done')} disabled={busy}>
@@ -117,10 +159,39 @@ function FollowUpCard({ item }: { item: FollowUp }) {
         <button type="button" style={btn} onClick={() => changeState('dismissed')} disabled={busy}>
           Dismiss
         </button>
+        <button type="button" style={btn} onClick={() => setPlanning((p) => !p)} disabled={busy}>
+          {planning ? 'Close' : 'Plan'}
+        </button>
         <button type="button" style={accentBtn} onClick={() => setBrainstorm((b) => !b)} disabled={busy}>
           {brainstorm ? 'Close' : 'Think it through'}
         </button>
       </div>
+
+      {planning ? (
+        <div style={{ marginTop: 10, display: 'grid', gap: 6, background: '#fffefb', border: `1px solid ${LINE}`, borderRadius: 8, padding: 10 }}>
+          <p style={{ margin: 0, fontSize: 12, color: MUTED }}>
+            Your own tracking only. This does not schedule or send anything.
+          </p>
+          <label style={{ fontSize: 13 }}>
+            When{' '}
+            <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+          </label>
+          <label style={{ fontSize: 13 }}>
+            With{' '}
+            <select value={linkedPersonId} onChange={(e) => setLinkedPersonId(e.target.value)}>
+              <option value="">no one</option>
+              {people.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="button" style={accentBtn} onClick={savePlan} disabled={busy}>
+            Save
+          </button>
+        </div>
+      ) : null}
 
       {brainstorm ? <BrainstormPanel seed={seed} /> : null}
       {err ? <p style={{ color: 'crimson', fontSize: 13, margin: '6px 0 0' }}>{err}</p> : null}

@@ -3,6 +3,7 @@ import { notFound, redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { duplicateCandidates, getPersonDetail, listPeople, type RetrievalDeps } from '@/lib/people'
 import { PersonCorrections } from '@/components/person-corrections'
+import { ContextAdder } from '@/components/context-adder'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,7 +44,13 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
       <p>
         <Link href="/people">&larr; People</Link>
       </p>
-      <h1 style={{ marginBottom: 4 }}>{person.name ?? '(unnamed)'}</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+        <h1 style={{ margin: 0 }}>{person.name ?? '(unnamed)'}</h1>
+        <ContextAdder targetKind="person" targetId={person.id} label={person.name ?? 'this person'} source="person_detail" showInterview />
+      </div>
+      {person.pendingRename ? (
+        <p style={{ color: '#b07a14', fontSize: 13, marginTop: 0 }}>This rename takes effect on the next miner run.</p>
+      ) : null}
       <div style={{ color: '#555', marginBottom: 12 }}>
         {[relationship, role, closeness, workOrPersonal].filter(Boolean).join(' / ') || 'No tags yet'}
       </div>

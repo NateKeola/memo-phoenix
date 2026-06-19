@@ -20,7 +20,7 @@ export type MineSummary = {
 export async function mine(userId: string, startedAtMs: number): Promise<MineSummary> {
   const { data, error } = await admin()
     .from('captures')
-    .select('id, user_id, mode, modality, body')
+    .select('id, user_id, mode, modality, body, target_kind, target_id')
     .eq('user_id', userId)
     .order('created_at', { ascending: true })
   if (error) throw new Error(`[miner] read captures: ${error.message}`)

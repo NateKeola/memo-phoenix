@@ -4,6 +4,7 @@
 // resolution rather than duplicating it.
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { neighborsOf, resolveProvenance, type ProvenanceHit, type RetrievalDeps } from '@/lib/chat/retrieval'
+import { firstLast, personDisplay, splitName } from '@/lib/names'
 
 export type { RetrievalDeps } from '@/lib/chat/retrieval'
 
@@ -20,9 +21,45 @@ function norm(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
+// Pending-rename display overlay (the Karalea fix). A confirmed rename flows
+// through the corrections table and is applied by the miner on its next run; until
+// then the displayed name would lag. This reads the pending rename corrections and
+// maps the SPECIFIC PERSON ID they target to the corrected name, so a rename
+// reaches the contact sheet immediately. It never edits canonical. Keying on the
+// person id (not the label) means it (a) cannot re-fire onto a different later
+// person who reuses the old name, and (b) self-consumes once the miner applies the
+// rename and the person's id changes (the old id no longer matches a current row).
+// A later rename of the same id wins (corrections are read in created_at order).
+// Merges are not shown optimistically: they collapse rows on the mine, and faking
+// that pre-mine would show two rows with the same name.
+export async function pendingRenames(deps: RetrievalDeps): Promise<Map<string, string>> {
+  const { data } = await deps.supabase
+    .from('corrections')
+    .select('payload, created_at')
+    .eq('user_id', deps.userId)
+    .eq('kind', 'rename_person')
+    .order('created_at', { ascending: true })
+  const out = new Map<string, string>()
+  for (const c of (data ?? []) as Array<{ payload: Record<string, unknown> | null }>) {
+    const p = c.payload ?? {}
+    const personId = str(p.person_id)
+    const to = str(p.to_label) || str(p.to)
+    if (personId && to) out.set(personId, to)
+  }
+  return out
+}
+
+function applyPending(id: string, label: string | null, renames: Map<string, string>): { name: string | null; pending: boolean } {
+  const to = renames.get(id)
+  return to ? { name: to, pending: true } : { name: label, pending: false }
+}
+
 export type PersonListItem = {
   id: string
   name: string | null
+  first: string
+  last: string
+  pendingRename: boolean
   relationship: string | null
   role: string | null
   closeness: string | null
@@ -38,11 +75,18 @@ type PersonRow = {
   salience: number | null
 }
 
-function toListItem(r: PersonRow): PersonListItem {
+function toListItem(r: PersonRow, renames: Map<string, string>): PersonListItem {
   const d = dataOf(r)
+  const pend = applyPending(r.id, r.label, renames)
+  // first/last from the corrected name when a rename is pending, else from the
+  // miner-persisted first/last (falling back to splitting the label).
+  const fl = pend.pending ? splitName(pend.name) : firstLast(r.label, d)
   return {
     id: r.id,
-    name: r.label,
+    name: personDisplay(fl.first, fl.last) || pend.name,
+    first: fl.first,
+    last: fl.last,
+    pendingRename: pend.pending,
     relationship: str(d.relationship),
     role: str(d.role),
     closeness: str(d.closeness),
@@ -52,22 +96,29 @@ function toListItem(r: PersonRow): PersonListItem {
   }
 }
 
-// All current people, salience-ordered then alphabetical.
+// All current people, salience-ordered then alphabetical, with the pending-rename
+// overlay applied to the displayed name.
 export async function listPeople(deps: RetrievalDeps): Promise<PersonListItem[]> {
-  const { data, error } = await deps.supabase
-    .from('canonical_people')
-    .select('id, label, data, salience')
-    .eq('user_id', deps.userId)
-    .is('valid_to', null)
-    .order('salience', { ascending: false })
-    .order('label', { ascending: true })
+  const [{ data, error }, renames] = await Promise.all([
+    deps.supabase
+      .from('canonical_people')
+      .select('id, label, data, salience')
+      .eq('user_id', deps.userId)
+      .is('valid_to', null)
+      .order('salience', { ascending: false })
+      .order('label', { ascending: true }),
+    pendingRenames(deps),
+  ])
   if (error) throw new Error(`[people] list: ${error.message}`)
-  return ((data ?? []) as PersonRow[]).map(toListItem)
+  return ((data ?? []) as PersonRow[]).map((r) => toListItem(r, renames))
 }
 
 export type PersonDetail = {
   id: string
   name: string | null
+  first: string
+  last: string
+  pendingRename: boolean
   summary: string | null
   data: Record<string, unknown>
   source_claim_ids: string[]
@@ -105,14 +156,20 @@ export async function getPersonDetail(deps: RetrievalDeps, id: string): Promise<
   if (!data) return null
   const row = data as { id: string; label: string | null; data: Record<string, unknown> | null; summary: string | null; source_claim_ids: string[] | null }
   const claimIds = row.source_claim_ids ?? []
-  const [neighbors, provenance, commitments] = await Promise.all([
+  const [neighbors, provenance, commitments, renames] = await Promise.all([
     neighborsOf(deps, id),
     resolveProvenance(deps, claimIds),
     commitmentsForPerson(deps, id),
+    pendingRenames(deps),
   ])
+  const pend = applyPending(row.id, row.label, renames)
+  const fl = pend.pending ? splitName(pend.name) : firstLast(row.label, dataOf(row))
   return {
     id: row.id,
-    name: row.label,
+    name: personDisplay(fl.first, fl.last) || pend.name,
+    first: fl.first,
+    last: fl.last,
+    pendingRename: pend.pending,
     summary: row.summary,
     data: dataOf(row),
     source_claim_ids: claimIds,

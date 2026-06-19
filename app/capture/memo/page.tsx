@@ -5,6 +5,20 @@ import { useRef, useState } from 'react'
 
 type State = 'idle' | 'recording' | 'transcribing' | 'done' | 'error'
 
+// capture-with-target: an "add memo about X" surface links here with the target as
+// query params, which we forward to the memo API so the capture knows its subject.
+function targetQuery(): string {
+  if (typeof window === 'undefined') return ''
+  const sp = new URLSearchParams(window.location.search)
+  const kind = sp.get('target_kind')
+  if (!kind) return ''
+  const out = new URLSearchParams({ target_kind: kind })
+  const id = sp.get('target_id')
+  if (id) out.set('target_id', id)
+  out.set('source', sp.get('source') ?? 'memo')
+  return `?${out.toString()}`
+}
+
 export default function AddMemoPage() {
   const [state, setState] = useState<State>('idle')
   const [transcript, setTranscript] = useState('')
@@ -33,7 +47,7 @@ export default function AddMemoPage() {
       const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' })
       setState('transcribing')
       try {
-        const res = await fetch('/api/capture/memo', {
+        const res = await fetch(`/api/capture/memo${targetQuery()}`, {
           method: 'POST',
           headers: { 'content-type': blob.type },
           body: blob,

@@ -1,6 +1,7 @@
 import 'server-only'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { logEvent } from '@/lib/telemetry'
+import type { CaptureTargetKind } from '@/lib/capture-target'
 
 export type CaptureMode = 'text' | 'memo' | 'interview'
 export type CaptureModality = 'text' | 'voice'
@@ -11,6 +12,9 @@ export type CaptureInput = {
   body: string
   routingHint?: string | null
   audioUrl?: string | null
+  // capture-with-target: what this capture is about (see lib/capture-target.ts)
+  targetKind?: CaptureTargetKind | null
+  targetId?: string | null
 }
 
 // Writes one append-only row to `captures` using the caller's RLS-scoped client
@@ -30,6 +34,8 @@ export async function writeCapture(
       body: input.body,
       routing_hint: input.routingHint ?? null,
       audio_url: input.audioUrl ?? null,
+      target_kind: input.targetKind ?? null,
+      target_id: input.targetId ?? null,
     })
     .select('id')
     .single()
@@ -40,7 +46,13 @@ export async function writeCapture(
     user_id: userId,
     event_type: 'capture',
     name: input.mode,
-    attrs: { mode: input.mode, modality: input.modality, routing_hint: input.routingHint ?? null },
+    attrs: {
+      mode: input.mode,
+      modality: input.modality,
+      routing_hint: input.routingHint ?? null,
+      target_kind: input.targetKind ?? null,
+      target_id: input.targetId ?? null,
+    },
   })
   return { id }
 }

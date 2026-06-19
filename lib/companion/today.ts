@@ -6,6 +6,7 @@
 // this surface are the on-demand brainstorm conversations (a separate route).
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { attachProvenance, type RetrievalDeps } from '@/lib/chat/retrieval'
+import { firstLast, personDisplay } from '@/lib/names'
 import { matchOverlay, readOverlay, type CommitmentRef } from './overlay'
 import { phraseCommitment, relationshipNudges, type RelationshipNudge } from './nudges'
 
@@ -22,6 +23,9 @@ export type FollowUp = {
   person: { id: string | null; label: string | null; workOrPersonal: string | null } | null
   bucket: Bucket
   snoozeUntil: string | null
+  // light, user-owned tracking from the overlay (never an external action)
+  dueDate: string | null
+  linkedPerson: { id: string; name: string } | null
   provenance: string | null
   sourceClaimIds: string[]
 }
@@ -35,6 +39,8 @@ export type Today = {
   snoozed: FollowUp[]
   relationshipNudges: RelationshipNudge[]
   upcomingEvents: UpcomingEvent[]
+  // people (id + display name) for the "link a person" picker
+  people: Array<{ id: string; name: string }>
   counts: { active: number; snoozed: number; nudges: number; events: number }
 }
 
@@ -71,19 +77,29 @@ export function bucketOf(due: string | null, snoozeUntil: string | null, now: nu
   return 'open'
 }
 
-async function peopleFor(
+type PersonInfo = { name: string; workOrPersonal: string | null }
+
+// All current people once: a map (id -> name + tag) for resolving commitment and
+// linked people, and a list for the "link a person" picker. The corpus is small.
+async function loadPeople(
   supabase: SupabaseClient,
-  userId: string,
-  personIds: string[]
-): Promise<Map<string, { label: string | null; workOrPersonal: string | null }>> {
-  const out = new Map<string, { label: string | null; workOrPersonal: string | null }>()
-  const ids = [...new Set(personIds.filter(Boolean))]
-  if (ids.length === 0) return out
-  const { data } = await supabase.from('canonical_people').select('id, label, data').eq('user_id', userId).in('id', ids)
+  userId: string
+): Promise<{ byId: Map<string, PersonInfo>; list: Array<{ id: string; name: string }> }> {
+  const byId = new Map<string, PersonInfo>()
+  const list: Array<{ id: string; name: string }> = []
+  const { data } = await supabase
+    .from('canonical_people')
+    .select('id, label, data')
+    .eq('user_id', userId)
+    .is('valid_to', null)
+    .order('label', { ascending: true })
   for (const r of (data ?? []) as Array<{ id: string; label: string | null; data: Record<string, unknown> | null }>) {
-    out.set(r.id, { label: r.label, workOrPersonal: str((r.data ?? {}).work_or_personal) })
+    const fl = firstLast(r.label, r.data)
+    const name = personDisplay(fl.first, fl.last) || r.label || 'someone'
+    byId.set(r.id, { name, workOrPersonal: str((r.data ?? {}).work_or_personal) })
+    list.push({ id: r.id, name })
   }
-  return out
+  return { byId, list }
 }
 
 export async function getToday(deps: RetrievalDeps, nowMs: number): Promise<Today> {
@@ -106,8 +122,7 @@ export async function getToday(deps: RetrievalDeps, nowMs: number): Promise<Toda
   const refs: CommitmentRef[] = commitments.map((c) => ({ id: c.id, label: c.label, personId: str((c.data ?? {}).person_id) }))
   const stateByCommitment = matchOverlay(refs, overlay)
 
-  const personIds = commitments.map((c) => str((c.data ?? {}).person_id) ?? '').filter(Boolean)
-  const people = await peopleFor(supabase, userId, personIds)
+  const { byId: people, list: peopleList } = await loadPeople(supabase, userId)
 
   type Active = CommitmentRow & { _state: ReturnType<typeof stateByCommitment.get>; _snoozedFuture: boolean }
   const active: Active[] = []
@@ -128,7 +143,9 @@ export async function getToday(deps: RetrievalDeps, nowMs: number): Promise<Toda
       const data = c.data ?? {}
       const pid = str(data.person_id)
       const p = pid ? people.get(pid) : undefined
-      const phrased = phraseCommitment(c.label, p?.label ?? null, str(data.due))
+      const phrased = phraseCommitment(c.label, p?.name ?? null, str(data.due))
+      const linkedId = c._state?.linked_person_id ?? null
+      const linked = linkedId ? people.get(linkedId) : undefined
       return {
         id: c.id,
         commitmentId: c.id,
@@ -136,9 +153,11 @@ export async function getToday(deps: RetrievalDeps, nowMs: number): Promise<Toda
         suggestion: phrased.suggestion,
         due: str(data.due),
         status: (c._state?.state ?? str(data.status) ?? 'open').toLowerCase(),
-        person: pid ? { id: pid, label: p?.label ?? null, workOrPersonal: p?.workOrPersonal ?? null } : null,
+        person: pid ? { id: pid, label: p?.name ?? null, workOrPersonal: p?.workOrPersonal ?? null } : null,
         bucket: bucketOf(str(data.due), c._state?.snooze_until ?? null, nowMs),
         snoozeUntil: c._state?.snooze_until ?? null,
+        dueDate: c._state?.due_date ?? null,
+        linkedPerson: linkedId ? { id: linkedId, name: linked?.name ?? 'someone' } : null,
         sourceClaimIds: c.source_claim_ids ?? [],
         source_claim_ids: c.source_claim_ids ?? [],
       }
@@ -158,6 +177,8 @@ export async function getToday(deps: RetrievalDeps, nowMs: number): Promise<Toda
     person: x.person,
     bucket: x.bucket,
     snoozeUntil: x.snoozeUntil,
+    dueDate: x.dueDate,
+    linkedPerson: x.linkedPerson,
     provenance: x.provenance,
     sourceClaimIds: x.sourceClaimIds,
   })
@@ -179,6 +200,7 @@ export async function getToday(deps: RetrievalDeps, nowMs: number): Promise<Toda
     snoozed,
     relationshipNudges: nudges,
     upcomingEvents,
+    people: peopleList,
     counts: { active: items.length, snoozed: snoozed.length, nudges: nudges.length, events: upcomingEvents.length },
   }
 }

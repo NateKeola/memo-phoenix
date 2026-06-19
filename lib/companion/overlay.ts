@@ -14,6 +14,9 @@ export type OverlayRow = {
   snooze_until: string | null
   match_label: string | null
   match_person_id: string | null
+  // light, user-owned tracking on a follow-up (never an external action)
+  due_date: string | null
+  linked_person_id: string | null
 }
 
 export type CommitmentRef = { id: string; label: string | null; personId: string | null }
@@ -109,6 +112,8 @@ export async function readOverlay(supabase: SupabaseClient, userId: string): Pro
       snooze_until: (row.snooze_until as string | null) ?? null,
       match_label: (row.match_label as string | null) ?? null,
       match_person_id: (row.match_person_id as string | null) ?? null,
+      due_date: (row.due_date as string | null) ?? null,
+      linked_person_id: (row.linked_person_id as string | null) ?? null,
     }
   })
 }
