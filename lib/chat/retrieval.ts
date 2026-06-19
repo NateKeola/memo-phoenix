@@ -16,6 +16,7 @@
 // default and return the validity fields so the composer can annotate an aged
 // fact as past ("as of <date>") rather than asserting it as present.
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { effectiveConfidence, isAged } from '@/lib/freshness/decay'
 
 // Canonical type tables the model can reference, keyed by a short, stable name.
 export const CANONICAL_TABLES = {
@@ -80,10 +81,19 @@ function fmtDate(iso: string | null | undefined): string | null {
 // model's context small while preserving validity + provenance handles.
 function project(type: CanonicalType, row: Row) {
   const data = d(row)
-  const validity =
-    row.valid_to === null
-      ? { current: true }
-      : { current: false, as_of: fmtDate(row.valid_to) }
+  const now = Date.now()
+  const fresh = { temporality: row.temporality, confidence: row.confidence, lastConfirmedAt: row.last_confirmed_at }
+  // Validity-aware (spec §3): a superseded row is past; a current decaying row that
+  // has faded and not been confirmed in a while is still current but should be
+  // spoken of "as of" its last confirmation, not asserted as present fact.
+  let validity: Record<string, unknown>
+  if (row.valid_to !== null) {
+    validity = { current: false, as_of: fmtDate(row.valid_to) }
+  } else if (isAged(fresh, now)) {
+    validity = { current: true, aged: true, as_of: fmtDate(row.last_confirmed_at) }
+  } else {
+    validity = { current: true }
+  }
   return {
     id: row.id,
     type,
@@ -91,7 +101,9 @@ function project(type: CanonicalType, row: Row) {
     summary: row.summary,
     temporality: row.temporality,
     ...validity,
-    confidence: round(row.confidence),
+    // report the DECAYED confidence so the model naturally hedges an aged fact;
+    // for evergreen/dated/fresh rows this equals the stored confidence.
+    confidence: round(effectiveConfidence(fresh, now)),
     data,
     source_claim_ids: row.source_claim_ids ?? [],
   }

@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
   // The brief is the injection seed. A daily interview scans the graph; a targeted
   // interview (capture-with-target) seeds the same DAILY_BRIEF slot with a specific
   // person or chat topic, so the conversation aims at building context on it.
-  let brief: Brief = { items: [], text: '', itemCount: 0, resurfacingStub: false }
+  let brief: Brief = { items: [], text: '', itemCount: 0, resurfacingStub: false, reconfirmCount: 0 }
   let briefError = false
   let targetKind: 'person' | 'topic' | null = null
   let targetId: string | null = null
@@ -96,12 +96,28 @@ export async function POST(request: NextRequest) {
       mode,
       effective_mode: effectiveMode,
       brief_item_count: brief.itemCount,
+      reconfirm_count: brief.reconfirmCount,
       degraded: mode === 'daily' && !hasBrief,
       brief_error: briefError,
       target_kind: targetKind,
       target_id: targetId,
     },
   })
+
+  // The freshness loop is visible in telemetry: which aging nodes were folded into
+  // the interview as "is this still true?" checks (the renew/supersede outcome is
+  // logged miner-side as the `freshness` event on the next mine).
+  if (brief.reconfirmCount > 0) {
+    await logEvent({
+      user_id: user.id,
+      event_type: 'reconfirm_surfaced',
+      name: 'daily',
+      attrs: {
+        count: brief.reconfirmCount,
+        labels: brief.items.filter((i) => i.kind === 'reconfirm').map((i) => i.label),
+      },
+    })
+  }
 
   // systemPrompt (bible + the user's own brief) is returned to the user's own
   // browser, which applies it to ElevenLabs via conversation_config_override (the
