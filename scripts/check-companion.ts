@@ -66,29 +66,31 @@ async function main() {
       snooze_until: null,
       match_label: 'Get dinner with Todd',
       match_person_id: 'P_TODD',
+      due_date: null,
+      linked_person_id: null,
     }
     const m = matchOverlay([drifted], [overlayFromBefore])
     check('drifted commitment re-matches its overlay (state survives drift)', m.get('NEW_ID_AAA')?.state === 'done')
 
     const exact: CommitmentRef = { id: 'SAME', label: 'whatever', personId: null }
-    const exactOverlay: OverlayRow = { commitment_id: 'SAME', state: 'snoozed', snooze_until: null, match_label: 'x', match_person_id: null }
+    const exactOverlay: OverlayRow = { commitment_id: 'SAME', state: 'snoozed', snooze_until: null, match_label: 'x', match_person_id: null, due_date: null, linked_person_id: null }
     check('exact id still matches', matchOverlay([exact], [exactOverlay]).get('SAME')?.state === 'snoozed')
 
-    const wrongPerson: OverlayRow = { commitment_id: 'OLD2', state: 'done', snooze_until: null, match_label: 'Have dinner with Todd', match_person_id: 'P_SOMEONE_ELSE' }
+    const wrongPerson: OverlayRow = { commitment_id: 'OLD2', state: 'done', snooze_until: null, match_label: 'Have dinner with Todd', match_person_id: 'P_SOMEONE_ELSE', due_date: null, linked_person_id: null }
     check('person disagreement blocks a fuzzy match', matchOverlay([drifted], [wrongPerson]).get('NEW_ID_AAA') === undefined)
 
-    const unrelated: OverlayRow = { commitment_id: 'OLD3', state: 'done', snooze_until: null, match_label: 'buy a new surfboard', match_person_id: null }
+    const unrelated: OverlayRow = { commitment_id: 'OLD3', state: 'done', snooze_until: null, match_label: 'buy a new surfboard', match_person_id: null, due_date: null, linked_person_id: null }
     check('an unrelated label does not falsely match', matchOverlay([drifted], [unrelated]).get('NEW_ID_AAA') === undefined)
 
-    const noSignature: OverlayRow = { commitment_id: 'OLD4', state: 'done', snooze_until: null, match_label: null, match_person_id: null }
+    const noSignature: OverlayRow = { commitment_id: 'OLD4', state: 'done', snooze_until: null, match_label: null, match_person_id: null, due_date: null, linked_person_id: null }
     check('overlay without a stored signature cannot fuzzy-match (no false positive)', matchOverlay([drifted], [noSignature]).get('NEW_ID_AAA') === undefined)
 
     // person-less matches need MUCH stronger label agreement (the review fix)
     const giftCommit: CommitmentRef = { id: 'G1', label: 'buy birthday gift', personId: null }
-    const giftOverlay: OverlayRow = { commitment_id: 'OLDG', state: 'done', snooze_until: null, match_label: 'buy holiday gift', match_person_id: null }
+    const giftOverlay: OverlayRow = { commitment_id: 'OLDG', state: 'done', snooze_until: null, match_label: 'buy holiday gift', match_person_id: null, due_date: null, linked_person_id: null }
     check('person-less weak overlap (Jaccard 0.5) NO LONGER carries state across items', matchOverlay([giftCommit], [giftOverlay]).get('G1') === undefined)
     const gymCommit: CommitmentRef = { id: 'GY1', label: 'Renew gym membership', personId: null }
-    const gymOverlay: OverlayRow = { commitment_id: 'OLDGY', state: 'snoozed', snooze_until: null, match_label: 'Renew the gym membership', match_person_id: null }
+    const gymOverlay: OverlayRow = { commitment_id: 'OLDGY', state: 'snoozed', snooze_until: null, match_label: 'Renew the gym membership', match_person_id: null, due_date: null, linked_person_id: null }
     check('person-less STRONG overlap still re-matches', matchOverlay([gymCommit], [gymOverlay]).get('GY1')?.state === 'snoozed')
   }
 
