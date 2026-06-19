@@ -70,3 +70,20 @@ The conversation runs on ElevenLabs Conversational AI. The signed URL is minted 
 3. Enable the override toggles for **System prompt** and **First message**.
 
 Set `NEXT_PUBLIC_ELEVENLABS_AGENT_ID` to that agent's id and `MEMO_USER_NAME` to your name (used in the bible).
+
+## Companion: today and draft-and-confirm actions (PR7)
+
+The "Today" surface (`/companion`) reads your open commitments and due items from the graph with deterministic queries (no model call), grouped overdue / soon / open, with provenance. You can mark an item done, snooze it, or dismiss it; that state lives in `companion_state` (a mutable overlay), never in canonical, so it survives a miner run.
+
+For a follow-up that needs reaching someone, Memo drafts a Gmail message or a Calendar invite for you to review and edit. Nothing sends until you click send: drafting and sending are separate actions, the send is gated in code behind an explicit confirmation and a live connection, and the send path never calls the model. Autonomous send is not built.
+
+### Required one-time Google setup
+
+Email and calendar actions use the user's connected Google account. Without it the Today view still works and prompts you to connect.
+
+1. In the Google Cloud Console, create an OAuth 2.0 **Web application** client.
+2. Add the authorized redirect URI `<your-app-origin>/api/google/callback` (for local dev `http://localhost:3000/api/google/callback`, plus your Vercel URL).
+3. Enable the **Gmail API** and **Google Calendar API** on the project.
+4. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (server-side only).
+
+Scopes requested are least privilege: `gmail.send` (send only, cannot read mail) and `calendar.events`. Tokens are stored server-side in `google_connections` and never reach the browser. Click "Connect Google" on the Today page to authorize.
