@@ -224,7 +224,7 @@ export async function resolveProvenance(
 // A one-line provenance hint attached inline to factual rows, so provenance is
 // always available to the composer without a second model decision. Best-effort:
 // resolves the first claim of each row in one batched pass.
-async function attachProvenance<T extends { id: string; source_claim_ids: string[] }>(
+export async function attachProvenance<T extends { id: string; source_claim_ids: string[] }>(
   deps: RetrievalDeps,
   rows: T[]
 ): Promise<Array<T & { provenance: string | null }>> {

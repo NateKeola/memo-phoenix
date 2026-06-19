@@ -26,6 +26,9 @@ export default async function HomePage() {
       <p style={{ margin: '16px 0' }}>
         <Link href="/people">People &rarr;</Link>
       </p>
+      <p style={{ margin: '16px 0' }}>
+        <Link href="/companion">Today &rarr;</Link>
+      </p>
       <form action="/auth/signout" method="post">
         <button type="submit">Sign out</button>
       </form>
