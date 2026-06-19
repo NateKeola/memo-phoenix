@@ -1,0 +1,59 @@
+import Link from 'next/link'
+import { redirect } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
+import { listPeople } from '@/lib/people'
+
+export const dynamic = 'force-dynamic'
+
+// The contact sheet (spec §11): the people in the graph, RLS-scoped, navigable.
+export default async function PeoplePage() {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
+
+  const people = await listPeople({ supabase, userId: user.id })
+
+  return (
+    <main style={{ padding: 24, fontFamily: 'system-ui, sans-serif', maxWidth: 720 }}>
+      <p>
+        <Link href="/">&larr; Home</Link>
+      </p>
+      <h1>People</h1>
+      <p style={{ color: '#666' }}>
+        {people.length} {people.length === 1 ? 'person' : 'people'} in your graph. Tap one to see what is
+        tied to them, or to fix a name or merge duplicates.
+      </p>
+      <ul style={{ listStyle: 'none', padding: 0, display: 'grid', gap: 6 }}>
+        {people.map((p) => (
+          <li key={p.id} style={{ border: '1px solid #eee', borderRadius: 8, padding: '10px 12px' }}>
+            <Link href={`/people/${p.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+              <strong>{p.name ?? '(unnamed)'}</strong>
+              {p.relationship ? <span style={{ color: '#555' }}> ({p.relationship})</span> : null}
+              {p.work_or_personal ? (
+                <span
+                  style={{
+                    marginLeft: 8,
+                    fontSize: 12,
+                    color: '#777',
+                    border: '1px solid #ddd',
+                    borderRadius: 10,
+                    padding: '1px 8px',
+                  }}
+                >
+                  {p.work_or_personal}
+                </span>
+              ) : null}
+              {p.aliases.length > 0 ? (
+                <span style={{ display: 'block', fontSize: 12, color: '#999' }}>
+                  also: {p.aliases.join(', ')}
+                </span>
+              ) : null}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </main>
+  )
+}

@@ -209,6 +209,7 @@ export async function resolveProvenance(
     .select('id, mode, modality, body, created_at')
     .eq('user_id', deps.userId)
     .in('id', [...captureIds])
+    .order('created_at', { ascending: true }) // earliest first, so [0] is the first mention
   return ((caps ?? []) as { id: string; mode: string; modality: string | null; body: string | null; created_at: string }[]).map(
     (c) => ({
       capture_id: c.id,
@@ -398,7 +399,9 @@ export async function neighborsOf(deps: RetrievalDeps, nodeId: string) {
     return {
       relation: data.relation ?? null,
       direction: isSource ? 'outgoing' : 'incoming',
-      other: nodes[otherId] ? { id: otherId, label: nodes[otherId].label } : { id: otherId, label: null },
+      other: nodes[otherId]
+        ? { id: otherId, label: nodes[otherId].label, type: nodes[otherId].type as string | null }
+        : { id: otherId, label: null, type: null as string | null },
       label: r.label,
       summary: r.summary,
     }
