@@ -35,7 +35,8 @@ import {
   STAGE_C_COMMITMENTS_PROMPT,
   STAGE_C_INSIGHTS_PROMPT,
 } from './prompts.generated'
-import { addUsage, emptyUsage, type PassResult, type TemporalClass } from './types'
+import { addUsage, emptyUsage, type DiscrepancyItem, type PassResult, type TemporalClass } from './types'
+import { loadClaimDates, reconcileFreshness, supersedeFromDiscrepancies } from './freshness'
 
 const A_NODE_TABLES = ['canonical_people', 'canonical_places_orgs']
 const ALL_NODE_TABLES = [
@@ -181,6 +182,7 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
     rows: rows.length,
     batches: collected.batches,
     discrepancies: collected.discrepancies,
+    discrepancyItems: collected.discrepancyItems,
     open_threads: collected.open_threads,
     usage: collected.usage,
   }
@@ -281,6 +283,7 @@ async function runRelationshipsPass(userId: string, nodes: CanonNode[]): Promise
     rows: rows.length,
     batches: collected.batches,
     discrepancies: collected.discrepancies,
+    discrepancyItems: collected.discrepancyItems,
     open_threads: collected.open_threads + dropped, // unresolved endpoints become threads
     usage: collected.usage,
   }
@@ -370,6 +373,7 @@ async function runInsightsPass(userId: string, nodes: CanonNode[]): Promise<Pass
     rows: rows.length,
     batches: collected.batches,
     discrepancies: collected.discrepancies,
+    discrepancyItems: collected.discrepancyItems,
     open_threads: collected.open_threads,
     usage: collected.usage,
   }
@@ -509,6 +513,33 @@ export async function runDerivation(userId: string): Promise<PassResult[]> {
       },
     })
   }
+
+  // ---- the freshness loop (spec §3, PR8) ----
+  // Runs last, over the freshly-written canonical layer. Deterministic: it
+  // supersedes contradicted rows (from the discrepancies the model flagged) and
+  // maintains each node's decay anchor (last_confirmed_at) + salience. Decay
+  // CONFIDENCE itself is computed at read time (lib/freshness in the app), never
+  // persisted, so a moving clock never churns canonical_history. This phase writes
+  // only rows that actually changed, so an unchanged corpus stays a no-op.
+  const claimDates = await loadClaimDates(userId)
+  const perTable = results
+    .filter((p) => p.discrepancyItems && p.discrepancyItems.length)
+    .map((p) => ({ table: p.table, items: p.discrepancyItems as DiscrepancyItem[] }))
+  const sup = await supersedeFromDiscrepancies(userId, perTable, claimDates)
+  const recon = await reconcileFreshness(userId, claimDates)
+  await logEvent({
+    user_id: userId,
+    event_type: 'miner_run',
+    name: 'freshness',
+    attrs: {
+      stage: 'freshness',
+      superseded: sup.superseded,
+      references_repointed: sup.repointed,
+      last_confirmed_updated: recon.lastConfirmedUpdated,
+      salience_updated: recon.salienceUpdated,
+      renewed: recon.renewed, // decay clocks that moved forward (a re-confirmation)
+    },
+  })
 
   return results
 }

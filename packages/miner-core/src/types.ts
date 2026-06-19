@@ -2,6 +2,11 @@ export type TemporalClass = 'evergreen' | 'dated' | 'decaying'
 
 export type RawClaim = { id: string; data: Record<string, unknown> }
 
+// A contradiction the resolution model flagged between two (or more) raw claims.
+// The freshness loop maps claim_ids to the canonical rows that cite them and
+// supersedes the older when the conflict produced two distinct current rows.
+export type DiscrepancyItem = { subject: string | null; description: string | null; claim_ids: string[] }
+
 // A node as the resolution model emits it (before we attach a deterministic id).
 export type ModelNode = {
   name?: unknown
@@ -53,6 +58,9 @@ export type PassResult = {
   discrepancies: number
   open_threads: number
   usage: Usage
+  // the discrepancy items themselves (not just the count), so derivation can drive
+  // supersession from them. Empty for passes that emit none.
+  discrepancyItems?: DiscrepancyItem[]
 }
 
 export const emptyUsage = (): Usage => ({

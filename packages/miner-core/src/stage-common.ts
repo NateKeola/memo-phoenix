@@ -2,7 +2,7 @@ import { MAX_BATCHES, MAX_BATCH_ATTEMPTS, pageLimit } from './config'
 import { callClaude, parseModelObject } from './anthropic'
 import { admin } from './supabase'
 import { canonicalJson, sha256 } from './identity'
-import { addUsage, emptyUsage, type ModelNode, type Usage } from './types'
+import { addUsage, emptyUsage, type DiscrepancyItem, type ModelNode, type Usage } from './types'
 
 // ---- reads ------------------------------------------------------------------
 
@@ -90,9 +90,21 @@ export async function setState(userId: string, scope: string, hash: string): Pro
 export type PaginatedCollect = {
   items: Array<Record<string, unknown>>
   discrepancies: number
+  // the discrepancy items themselves (deduped), so derivation can act on them
+  discrepancyItems: DiscrepancyItem[]
   open_threads: number
   usage: Usage
   batches: number
+}
+
+// Pull the {subject, description, claim_ids} shape out of a raw discrepancy object,
+// keeping only ids that are real strings. Returns null when there is nothing usable.
+function parseDiscrepancy(v: unknown): DiscrepancyItem | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  const claim_ids = uniqueStrings(o.claim_ids)
+  if (claim_ids.length < 2) return null // a contradiction needs at least two claims
+  return { subject: asString(o.subject), description: asString(o.description), claim_ids }
 }
 
 // Loop LLM calls until the model signals has_more:false or stops adding new
@@ -113,6 +125,8 @@ export async function paginatedCollect(opts: {
   const batchLimit = pageLimit()
   let usage = emptyUsage()
   let discrepancies = 0
+  const discrepancyItems: DiscrepancyItem[] = []
+  const discSeen = new Set<string>()
   let openThreads = 0
   let batches = 0
 
@@ -156,14 +170,24 @@ export async function paginatedCollect(opts: {
       if (label) already.push(label)
       fresh++
     }
-    if (Array.isArray(out.discrepancies)) discrepancies += out.discrepancies.length
+    if (Array.isArray(out.discrepancies)) {
+      discrepancies += out.discrepancies.length
+      for (const raw of out.discrepancies) {
+        const parsed = parseDiscrepancy(raw)
+        if (!parsed) continue
+        const key = [...parsed.claim_ids].sort().join('|') // dedup across batches by the conflicting claim set
+        if (discSeen.has(key)) continue
+        discSeen.add(key)
+        discrepancyItems.push(parsed)
+      }
+    }
     if (Array.isArray(out.open_threads)) openThreads += out.open_threads.length
 
     if (out.has_more !== true) break
     if (fresh === 0) break // no-progress guard
   }
 
-  return { items, discrepancies, open_threads: openThreads, usage, batches }
+  return { items, discrepancies, discrepancyItems, open_threads: openThreads, usage, batches }
 }
 
 // ---- provenance -------------------------------------------------------------
@@ -212,7 +236,7 @@ export function round3(n: number): number {
 // whose content actually changed, so canonical_history captures real changes,
 // not full-table churn.
 
-type ExistingSig = { change: string; full: string }
+type ExistingSig = { change: string; full: string; superseded: boolean }
 
 // Change-detection keys ONLY on the meaningful resolution: the provenance set
 // (which raw claims support the node) and the temporal class. The synthesized and
@@ -268,25 +292,32 @@ export async function writeCanonical(
 
   const ids = rows.map((r) => r.id)
   const existing = new Map<string, ExistingSig>()
-  // chunk the existence read so a large id set never overflows the query
+  // Read the existing row per id INCLUDING superseded ones (an id is unique, so it
+  // is either current or superseded, never both). We need to know about superseded
+  // rows so a model re-emitting a retired node does not resurrect it (the freshness
+  // loop closes a contradicted row's validity; re-inserting it would undo that).
   for (let i = 0; i < ids.length; i += 500) {
     const chunk = ids.slice(i, i + 500)
     const { data, error } = await admin()
       .from(table)
-      .select('id, label, data, source_claim_ids, temporality, confidence, salience, summary')
+      .select('id, label, data, source_claim_ids, temporality, confidence, salience, summary, valid_to')
       .eq('user_id', userId)
-      .is('valid_to', null) // compare only against the current (non-superseded) rows
       .in('id', chunk)
     if (error) throw new Error(`[miner] read-existing ${table}: ${error.message}`)
     for (const e of (data ?? []) as ExistingRow[]) {
       const n = normalizeExisting(e)
-      existing.set(String(e.id), { change: changeSignature(n), full: fullSignature(n) })
+      existing.set(String(e.id), {
+        change: changeSignature(n),
+        full: fullSignature(n),
+        superseded: e.valid_to !== null,
+      })
     }
   }
 
   let inserted = 0
   let updated = 0
   let unchanged = 0
+  let resurrectSkipped = 0 // re-emitted rows we leave retired (validity already closed)
   let fullWouldWrite = 0 // MINER_CHURN_DEBUG: what the old full signature would rewrite
   const toWrite: typeof rows = []
   for (const r of rows) {
@@ -294,13 +325,17 @@ export async function writeCanonical(
     if (prev === undefined) {
       inserted++
       toWrite.push(r)
+    } else if (prev.superseded) {
+      // The row was retired (e.g. a contradicted fact). Leave it superseded; the
+      // survivor carries the truth. Do not resurrect or rewrite it.
+      resurrectSkipped++
     } else if (prev.change !== changeSignature(r)) {
       updated++
       toWrite.push(r)
     } else {
       unchanged++
     }
-    if (debug && (prev === undefined || prev.full !== fullSignature(r))) fullWouldWrite++
+    if (debug && (prev === undefined || (!prev.superseded && prev.full !== fullSignature(r)))) fullWouldWrite++
   }
 
   for (let i = 0; i < toWrite.length; i += 500) {
@@ -312,7 +347,7 @@ export async function writeCanonical(
   if (debug) {
     console.log(
       `[churn] ${table}: provenance-sig writes=${toWrite.length} ` +
-        `(ins ${inserted}/upd ${updated}/unchanged ${unchanged}); old full-sig would write=${fullWouldWrite}`
+        `(ins ${inserted}/upd ${updated}/unchanged ${unchanged}/retired-kept ${resurrectSkipped}); old full-sig would write=${fullWouldWrite}`
     )
   }
   return { inserted, updated, unchanged }
@@ -327,6 +362,7 @@ type ExistingRow = {
   confidence: number | null
   salience: number | null
   summary: string | null
+  valid_to: string | null
 }
 
 function normalizeExisting(e: ExistingRow) {
