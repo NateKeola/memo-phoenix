@@ -1,0 +1,90 @@
+# Memo Phoenix — Handoff
+
+This file plus `CLAUDE.md` (the decision log especially) is the complete pickup point. A fresh session should read both before doing anything. The authoritative scope and architecture live in `docs/memo-phoenix-spec.md`; this file is the operational state on top of it.
+
+Last updated: 2026-06-19.
+
+## What this is
+
+Memo Phoenix is a single-user personal knowledge and companion system. Capture (voice memo, text, interview) feeds a deterministic miner that builds a personal knowledge graph (canonical layer), which the chat, contact sheet, and companion surfaces read back. The LLM is one stage of a deterministic pipeline, not the orchestrator.
+
+Stack: Next.js 15 App Router (single app) + a `packages/miner-core` workspace package, Supabase Postgres 17 with FORCE RLS scoped to `user_id = auth.uid()`, Anthropic SDK (`claude-opus-4-8`), ElevenLabs (Scribe STT + Conversational AI for interviews). Deploy is merge-driven: PRs to `main`, migrations apply via a GitHub Action on merge, Vercel deploys via Git integration.
+
+## Current build state (all merged)
+
+GitHub PR numbers do not match the spec build-sequence numbers; the mapping:
+
+- PR #1 = spec PR0 Foundation. Scaffold (Next app + miner-core stub), single-user Supabase auth (`/login` only, no signup), full data spine, telemetry sink, FORCE RLS, migrate-on-merge CI. Migrations 0001-0007.
+- PR #2 = spec PR1 Miner port. `packages/miner-core`: captures -> raw_* (one extraction LLM call per capture) -> canonical_* (Stage A people/places, B projects/events/facts, C relationships/commitments/insights). Deterministic UUIDv5 identity, id-preserving upsert, `miner_state` memoization (0008). CLI worker (`npm run miner` / `npm run seed`).
+- PR #3 = spec PR2 Capture surface. The always-reachable `+`: Add text, Add memo (ElevenLabs Scribe STT, server-side), Start interview. One append-only `captures` row per capture.
+- PR #4 = Canonical churn reduction. `writeCanonical` change-signature keys ONLY on `{sorted source_claim_ids, temporality}`, not summary/data drift, so re-resolution does not rewrite every row.
+- PR #5 = spec PR3 Interview agent. ElevenLabs Conversational AI voice agent, two modes (open brain-dump, daily graph-aware briefing) sharing one bible system prompt. Deterministic briefing (no LLM). Migration 0009 `interview_sessions` (mutable). Each interview writes one append-only interview capture.
+- PR #6 = spec PR6 Search and chat surface. `/ask`: 9 deterministic RLS-scoped retrieval tools over canonical, a thin composing LLM tool-loop, streaming, cached system prompt (padded past 4096). NO baseline gate (decision override of spec PR4). pgvector deferred.
+- PR #7 = spec PR5 Contact sheet and corrections. `/people` contact sheet + rename/merge corrections (append-only `corrections` table; the miner honors them on recompute). Label rewrite before id; supersede losers; retire relationships, repoint commitments/projects/events/insights.
+- PR #8 = spec PR7 Companion core (original). Today surface + draft-and-confirm Gmail/Calendar actions. Migration 0010 (`companion_state`, `google_connections`, `companion_actions`).
+- PR #9 = Companion revised to conversational follow-ups, NO sending. Deleted `lib/google/*`, `app/api/google/*`, `lib/companion/draft.ts`. Migration 0011 drops `google_connections` + `companion_actions`, adds `companion_state.match_label`/`match_person_id`. Relationship-nudge heuristic, brainstorm conversation, label-drift overlay.
+- PR #10 = Add context from anywhere + identity fixes (merged). Capture-with-target mechanism; first+last identity (id-preserving); the Karalea pending-rename display overlay; targeted interviews; add-context from a person / chat / follow-up; light follow-up date and linked-person tracking. Migration 0012 (`captures.target_kind`/`target_id`, `companion_state.due_date`/`linked_person_id`).
+
+Spec build-sequence status (spec §16):
+- PR0 Foundation, PR1 Miner, PR2 Capture, PR3 Interview, PR5 Contact sheet, PR6 Search/chat, PR7 Companion: DONE.
+- PR4 Baseline trainer and search gate: SKIPPED by user decision (search is always accessible).
+- PR8 Freshness loop (decay, salience, supersession, re-confirm surfacing): NOT BUILT. The columns exist (validity interval, confidence, salience, last_confirmed_at) but the scoring/decay/resurfacing logic is the largest remaining novel feature.
+
+## Migrations (forward-only, in `supabase/migrations/`)
+
+0001 helpers + telemetry; 0002 ground truth (captures, corrections, confirmations, all append-only); 0003 raw (8 tables); 0004 canonical (8 type tables + canonical_history); 0005 collections; 0006 aux (open_threads, discrepancies, reconfirm_candidates view); 0007 RLS; 0008 miner_state; 0009 interview_sessions (mutable); 0010 companion (companion_state + the now-dropped google_connections/companion_actions); 0011 drops the two sending tables, adds companion_state match columns; 0012 captures target columns + companion_state due_date/linked_person_id.
+
+Tables that are MUTABLE (no append-only/history trigger), because they are operational state not ground truth: `interview_sessions`, `companion_state`, `telemetry_events` (telemetry is append-only by trigger but written by service role), `miner_state`. Everything in captures/corrections/confirmations/raw_*/canonical_history is hard append-only via `forbid_mutation()`. Canonical type tables are written only by the miner (id-preserving upsert plus, in corrections, supersession).
+
+## Repo layout (key files)
+
+- `packages/miner-core/src/`: `run.ts` (orchestration), `extract.ts` (captures -> raw, honors capture target), `derive.ts` (raw -> canonical A/B/C, people pass + corrections), `corrections.ts` (rename/merge rewrite + supersede/repoint), `identity.ts` (UUIDv5, splitName/canonicalPersonId), `stage-common.ts` (writeCanonical, memoization), `anthropic.ts`, `prompts.generated.ts` (built from `prompts/*.md`).
+- `lib/`: `supabase/*` (server/client/admin clients), `telemetry.ts`, `captures.ts`, `capture-target.ts`, `names.ts`, `people.ts`, `chat/{retrieval,agent,system-prompt}.ts`, `interview/{compose,briefing,bible.generated}.ts`, `companion/{today,overlay,nudges,brainstorm}.ts`, `stt/*`, `elevenlabs.ts`.
+- `app/`: `page.tsx` (home), `ask/`, `people/`, `companion/`, `capture/{text,memo,interview}/`, `api/{chat,companion/brainstorm,capture/memo,interview/start,interview/end}/`, `context-actions.ts`.
+- `components/`: `capture-menu`, `chat`, `context-adder`, `person-corrections`, `companion/companion-view`.
+- `scripts/`: `check-retrieval.ts`, `check-companion.ts`, `check-context.ts` (offline, RLS/identity/overlay/target checks; run with `npx tsx`).
+- Prompt discipline: editing a `prompts/*.md` requires regenerating and committing the `.generated.ts` (runtime fs reads fail on Vercel). Generators: `npm run prompts:generate`, `npm run bible:generate`.
+
+## The capture-with-target mechanism (PR #10, reusable)
+
+A capture can be ABOUT a person, a commitment, or a chat topic: `captures.target_kind` in {person, commitment, topic} and `captures.target_id` (canonical id; null for a free topic). `lib/capture-target.ts` is the shape. The miner honors it in `extract.ts` `resolveTargetLine`: it resolves the target id to a name/label and prepends a one-line context note to the extraction INPUT only (the stored capture body is unchanged), so extracted people/facts/relationships attribute to the intended thing. Interviews additionally seed the same `DAILY_BRIEF` slot with a person or topic brief. All add-context surfaces (person `+`, chat "Talk more about this", follow-up `+`) use this one mechanism.
+
+## Deferred items and why
+
+1. Photo / reminisce minigame: upload a photo, get prompted to memo or talk about the trip. Its own later PR. It is the richest add-context surface and is now easy because the capture-with-target plumbing (PR #10) exists.
+2. Google OAuth + connectors settings UI + single sign-on: the account-connection layer. Removed in PR #9 when the companion pivoted away from sending. A later dedicated connectors build re-introduces `google_connections` and its OAuth flow.
+3. Real scheduling / sending (email send, calendar create): V1 once trusted. The companion is draft-and-suggest only; in V0 it nudges the user to act in real life and never performs an external side effect. The action gate, when built, stays in code, not a prompt.
+4. System-wide deterministic name-keyed id hardening: identity is UUIDv5 over the normalized label (first+last for people now). PR #10's first+last improves the people key but is NOT the full fix. Its own dedicated PR (alias/claim-overlap matching, or stabler ids) should land before any feature that depends on stable ids across renames at scale.
+5. Decay / salience / freshness loop (spec §3, the novel core): validity intervals + supersession + decay by temporal class + salience + re-confirm surfacing folded back through the interview loop. NOT built. Constants are open-exploratory. This is the biggest remaining feature.
+6. Incremental miner pass: a full recompute is roughly an 8-minute cost. The current miner re-derives the whole canonical layer each run (memoized so unchanged input is a no-op, but a single new capture still re-resolves affected types). An incremental pass is deferred performance work.
+7. Semantic / pgvector search (spec §10 secondary path): fuzzy recall over raw for "that vague thing I said once". No pgvector, no embedding model chosen. A deliberate cost/scope decision; a later fast-follow.
+8. Per-stage model-routing harness + a miner-extraction cost AB test: route different pipeline stages to different models (cheaper models for mechanical stages, stronger for resolution/insights) and AB-test extraction cost vs quality. Planned, not built.
+
+## Known limitations and operational gotchas
+
+- Deterministic name-keyed identity. Symptoms: (a) two genuinely-distinct people sharing an identical canonical name collide into one row; (b) label drift (the LLM rewording a canonical label) mints a new deterministic id, producing a near-duplicate INSERT, worst for phrase-labeled types (facts, insights); (c) any overlay keyed on a canonical id (companion_state on commitment id) can orphan if the label drifts. Mitigations already in place: the contact-sheet pending-rename overlay is keyed on the person id the correction targets; the companion_state overlay stores `match_label`/`match_person_id` and fuzzy re-matches a drifted commitment (person agreement plus Jaccard, with a much higher bar when no person corroborates). The real fix is deferred item 4.
+- Migrate-on-merge depends on three GitHub Actions secrets: `SUPABASE_ACCESS_TOKEN`, `SUPABASE_DB_PASSWORD`, `SUPABASE_PROJECT_REF`. They have been working (0010-0012 applied to dev on merge). If `migrate.yml` ever shows a red X, the secrets lapsed: apply migrations by hand with `supabase db push` against the dev project (`azlobwtiptvarfeukzcv`), and be aware the remote schema can lag the local migration files until then. Never apply an empty migration. During PR0/PR1 bootstrap, direct `supabase db push` was acceptable; after that, merge applies them.
+- Local-dev environment contention: Xcode and GitHub Desktop watching the repo run concurrent git operations and can wedge git and the filesystem (hung `git` processes, stale `.git/index.lock`, `ECANCELED` read errors). Close those apps before heavy git/build work. If a commit hangs, kill the stuck `git` process and `rm -f .git/index.lock`. A file-sync tool occasionally creates spurious `"<name> 2.ts"` duplicate files that poison the local build; they are untracked junk, delete them. `rm -rf .next` before typecheck/build clears stale `.next/types/*.d 2.ts` duplicate artifacts.
+- Anthropic API usage limit: blocks the miner, interview drafting, and chat answers until 2026-07-01. All deterministic surfaces (today selection, contact sheet, retrieval tools, overlays) work without the model; the model-dependent round-trips are the user's acceptance check once the limit lifts. Two real rename corrections (Kara Lee -> Karalea, Tal -> Todd) and any PR #10 targeted captures are pending the next mine.
+- claude-mem Read hook: reading a file that has prior observations returns only line 1. Use Bash `cat`/`sed`/`grep` to read content, or `Read` then `Edit` (Edit works once the file is registered as read).
+
+## Standing rules and architectural invariants (do not drift)
+
+- Single-user tenancy: `user_id` is the tenant key. FORCE RLS on every table scoped to `user_id = auth.uid()`. No exceptions.
+- The service-role key is server-side only, never in the client bundle. JWT validation on every authenticated route. Confirm secrets and prompt text are absent from `.next/static`.
+- `captures`, `corrections`, `confirmations` are append-only. Every raw row carries `capture_id`; every canonical row carries `source_claim_ids`. Provenance is mandatory.
+- Canonical is recomputed from the full ground-truth set every miner run. The app NEVER edits canonical directly. The miner is the only writer of canonical. Renames go through `corrections`; commitment/follow-up state goes to the `companion_state` overlay.
+- Every canonical row carries a temporal class, a validity interval (`valid_from`, `valid_to`, `superseded_by`), plus `confidence`, `salience`, `last_confirmed_at`.
+- The LLM is one stage of a deterministic pipeline, not the orchestrator. What to surface is chosen by deterministic code; the model is only the interview/brainstorm conversation, the on-demand chat composition, and drafting. High-stakes actions are gated in code, not a prompt.
+- Deterministic prompt composition only. Direct Anthropic SDK (no LangChain). Cache system prompts (pad past 4096 tokens, ephemeral). Telemetry from day one. Prompt `.md` edits require regenerating and committing the `.generated.ts`.
+- Schema changes go through migration files only; never apply an empty migration.
+- Memo Phoenix is its own world (own repo, Supabase, Vercel). No path to the Miine project. The GitHub token is a fine-grained PAT scoped to this repo. The only privileged action from this environment is `gh` PR create/merge.
+- No em dashes in any document or output. Direct, simple language.
+- CONTINUITY: after each substantive change, append a dated entry to the CLAUDE.md decision log capturing what changed and why. Context must survive compaction and handoffs without relying on session memory.
+
+## Immediate next steps
+
+1. When the Anthropic API limit lifts (2026-07-01): run the miner (`npm run miner`) to fold the pending corrections (Karalea, Tal) and any PR #10 targeted captures into the graph, then do the live acceptance checks: interview round-trips (open, daily, person-targeted, chat-topic-targeted), chat answers, and companion brainstorm. Confirm Karalea propagates to the canonical label (it already shows correctly via the display overlay).
+2. Build the freshness loop (spec §3) — the largest remaining novel feature — or the deterministic-id hardening (highest-value tech debt), depending on priority.
+3. The photo/reminisce minigame is the natural next add-context surface now that the plumbing exists.
+4. Keep every change merge-driven: branch off main, commit in logical steps, open a PR with `gh`, do not self-merge unless asked. Append a decision-log entry each time.

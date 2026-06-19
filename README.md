@@ -29,10 +29,13 @@ See [.env.example](.env.example). The service-role key is server-only and must n
 
 ## Database and migrations
 
-Migrations live in `supabase/migrations/` and are forward-only (never edit a migration after it has been applied). They reach the dev project two ways:
+Migrations live in `supabase/migrations/` and are forward-only (never edit a migration after it has been applied, and never apply an empty one). See [docs/MIGRATIONS.md](docs/MIGRATIONS.md) for the full runbook: the required-secrets checklist, the CLI-independent fallback, and the guard. They reach the dev project three ways:
 
-- During bootstrap (PR0 and PR1): directly, with `supabase db push` against the linked dev project.
-- After that: automatically by [.github/workflows/migrate.yml](.github/workflows/migrate.yml) on merge to `main` (paths `supabase/migrations/**`). `supabase db push` is idempotent, so re-runs are safe.
+- **On merge to main (the normal path):** [.github/workflows/migrate.yml](.github/workflows/migrate.yml) runs `supabase db push` on every merge that touches `supabase/migrations/**`, then verifies the remote actually has every migration. This needs the three GitHub Actions secrets below.
+- **CLI-independent fallback:** `npm run db:status` reports applied vs pending against the remote, and `npm run db:apply` applies anything pending. It goes through the Supabase Management API over HTTPS (no Supabase CLI, no database password, no `pg` driver), so it works when the CLI cannot connect from a machine. It needs `SUPABASE_PROJECT_REF` and `SUPABASE_ACCESS_TOKEN` in the environment or `.env.local`.
+- **Bootstrap (PR0 and PR1):** directly, with `supabase db push` against the linked dev project.
+
+Check the live applied-vs-pending state any time with `npm run db:status`.
 
 The schema is the load-bearing spine. Every append-only table (`captures`, `corrections`, `confirmations`, all `raw_*`, `canonical_history`, `telemetry_events`) is enforced by a `forbid_mutation()` trigger. Every canonical row carries the mandatory shared block (provenance `source_claim_ids`, temporal class, validity interval, confidence, salience, `last_confirmed_at`). RLS is enabled and FORCED on every table, scoped to `user_id = auth.uid()`.
 
@@ -40,10 +43,10 @@ The schema is the load-bearing spine. Every append-only table (`captures`, `corr
 
 The only privileged action from the build environment is `gh` PR create and merge. Platform tokens live in GitHub Actions secrets, not in the local environment.
 
-Set these as GitHub Actions secrets BEFORE merging PR0 (otherwise the first `migrate.yml` run fails with a harmless red X, since the dev DB is already migrated during bootstrap):
+Set these three under **Settings -> Secrets and variables -> Actions -> New repository secret**. This is the gap that made `migrate.yml` fail on earlier PRs: the secrets were never set, so every run errored and migrations had to be applied by hand (and the remote could lag local). [docs/MIGRATIONS.md](docs/MIGRATIONS.md) says exactly where each value comes from:
 
-- `SUPABASE_ACCESS_TOKEN`
-- `SUPABASE_DB_PASSWORD`
+- `SUPABASE_ACCESS_TOKEN` (Supabase account -> Access Tokens; also used by `npm run db:apply`)
+- `SUPABASE_DB_PASSWORD` (Project Settings -> Database)
 - `SUPABASE_PROJECT_REF` (`azlobwtiptvarfeukzcv`)
 
 Set the Vercel project environment variables (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`) in the Vercel dashboard.
