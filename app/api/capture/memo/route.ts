@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { writeCapture } from '@/lib/captures'
 import { transcribe } from '@/lib/stt'
+import { parseTarget } from '@/lib/capture-target'
+import { logEvent } from '@/lib/telemetry'
 
 // Server-side: the ElevenLabs key never leaves this route. Receives the raw
 // recorded audio as the request body, transcribes via Scribe, writes an
@@ -32,11 +34,27 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'no speech detected' }, { status: 422 })
   }
 
+  // capture-with-target: an "add memo about this" surface passes the target as
+  // query params (?target_kind=person&target_id=...).
+  const url = new URL(request.url)
+  const target = parseTarget(url.searchParams.get('target_kind'), url.searchParams.get('target_id'))
+  const source = url.searchParams.get('source')
+
   const { id } = await writeCapture(supabase, user.id, {
     mode: 'memo',
     modality: 'voice',
     body: text,
+    targetKind: target?.kind ?? null,
+    targetId: target?.id ?? null,
     // audio file retention (audio_url) is deferred; V0 keeps the transcript only.
   })
+  if (target) {
+    await logEvent({
+      user_id: user.id,
+      event_type: 'context_add',
+      name: 'memo',
+      attrs: { source, target_kind: target.kind, target_id: target.id ?? null },
+    })
+  }
   return NextResponse.json({ id, transcript: text })
 }

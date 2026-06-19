@@ -24,6 +24,46 @@ export type Capture = {
   mode: string
   modality: string
   body: string | null
+  // capture-with-target: what this capture is about, so extracted context attaches
+  // to the intended thing rather than the model guessing.
+  target_kind?: string | null
+  target_id?: string | null
+}
+
+// Resolve the capture's target to a short context line prepended to the extraction
+// input (the stored capture body is NOT modified). This is how the miner honors
+// the target: it tells the extraction model what the note is about, so the people,
+// facts, and relationships in it attribute to the intended person/commitment.
+async function resolveTargetLine(capture: Capture): Promise<string | null> {
+  const { target_kind: kind, target_id: id, user_id: userId } = capture
+  if (kind === 'person' && id) {
+    const { data } = await admin()
+      .from('canonical_people')
+      .select('label, data')
+      .eq('user_id', userId)
+      .eq('id', id)
+      .maybeSingle()
+    if (data) {
+      const d = ((data as { data: Record<string, unknown> | null }).data ?? {}) as Record<string, unknown>
+      const name =
+        `${typeof d.first_name === 'string' ? d.first_name : ''} ${typeof d.last_name === 'string' ? d.last_name : ''}`.trim() ||
+        (data as { label: string | null }).label ||
+        'this person'
+      return `Context: this note is about the person ${name}. Attribute the people, facts, and relationships in it to ${name} where it fits.`
+    }
+  }
+  if (kind === 'commitment' && id) {
+    const { data } = await admin()
+      .from('canonical_commitments')
+      .select('label')
+      .eq('user_id', userId)
+      .eq('id', id)
+      .maybeSingle()
+    const label = (data as { label: string | null } | null)?.label
+    if (label) return `Context: this note adds detail to the follow-up "${label}".`
+  }
+  // a 'topic' target's context is already woven into the seeded interview transcript
+  return null
 }
 
 export type ExtractResult = {
@@ -36,7 +76,7 @@ export type ExtractResult = {
 
 // Extract one capture into the raw layer. Idempotent: a capture is append-only
 // and immutable, so it is extracted exactly once (tracked in miner_state, never
-// as a column on captures — captures is hard append-only). Raw ids are
+// as a column on captures, which is hard append-only). Raw ids are
 // deterministic, and the insert is ON CONFLICT DO NOTHING, so a partial re-run
 // cannot violate the append-only trigger.
 export async function extractCapture(capture: Capture): Promise<ExtractResult> {
@@ -52,7 +92,9 @@ export async function extractCapture(capture: Capture): Promise<ExtractResult> {
     return { captureId: capture.id, skipped: false, rawInserted: 0, bySection, usage: emptyUsage() }
   }
 
-  const user = JSON.stringify({ mode: capture.mode, modality: capture.modality, body })
+  const aboutLine = await resolveTargetLine(capture)
+  const extractBody = aboutLine ? `${aboutLine}\n\n${body}` : body
+  const user = JSON.stringify({ mode: capture.mode, modality: capture.modality, body: extractBody })
   const res = await callClaude(EXTRACTION_PROMPT, user)
   const parsed = parseModelObject(res.raw, `extract capture ${capture.id}`)
 
