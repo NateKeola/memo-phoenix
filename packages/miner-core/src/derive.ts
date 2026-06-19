@@ -1,4 +1,13 @@
-import { canonicalId } from './identity'
+import { canonicalId, normalizeLabel } from './identity'
+import {
+  buildPeopleRewrite,
+  readPeopleCorrections,
+  repointReferences,
+  retireStaleRelationships,
+  rewriteLabel,
+  supersedeLosers,
+  type PeopleRewrite,
+} from './corrections'
 import { logEvent } from './telemetry'
 import {
   asString,
@@ -64,12 +73,17 @@ type NodePassConfig = {
   defaultTemporality: TemporalClass
   system: string
   context: CanonNode[] // resolved Stage A/B nodes the model may reference (may be empty)
+  // people-identity corrections (people pass only): rewrite resolved labels before
+  // the deterministic id is computed, so renames and merges survive recompute.
+  peopleRewrite?: PeopleRewrite
 }
 
 async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassResult> {
   const claims = await readRawClaims(userId, cfg.rawTable)
   const ctxKey = cfg.context.map((n) => ({ id: n.id, label: n.label, aliases: n.aliases }))
-  const hash = inputHash([cfg.canonicalTable, claims, ctxKey])
+  // The corrections fingerprint is part of the input: a new rename/merge busts the
+  // people pass memo so the rewrite is actually re-applied.
+  const hash = inputHash([cfg.canonicalTable, claims, ctxKey, cfg.peopleRewrite?.fingerprint ?? ''])
   const scope = `derive:${cfg.canonicalTable}`
   if ((await getState(userId, scope)) === hash) return emptyPass(cfg.canonicalTable, true)
   if (claims.length === 0) {
@@ -113,18 +127,25 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
     summary: string | null
   }>()
   for (const node of collected.items) {
-    const name = asString(node.name)
-    if (!name) continue
+    const rawName = asString(node.name)
+    if (!rawName) continue
     const cited = uniqueStrings(node.source_claim_ids)
     if (cited.length === 0) continue
+    // Apply a people correction: rewrite the surface form to the survivor label
+    // BEFORE the id is derived, so a renamed/merged person resolves to one id and
+    // every later mention of the old name lands on the survivor, not a duplicate.
+    const name = cfg.peopleRewrite ? rewriteLabel(cfg.peopleRewrite, rawName) : rawName
+    const nodeAliases = uniqueStrings(node.aliases)
+    // keep the original surface form as an alias so the correction is self-stable
+    if (normalizeLabel(rawName) !== normalizeLabel(name)) nodeAliases.push(rawName)
     const id = canonicalId(userId, cfg.canonicalTable, name)
     const nodeData = (node.data && typeof node.data === 'object' ? (node.data as Record<string, unknown>) : {})
     const existing = byId.get(id)
     if (existing) {
-      // two surface forms normalized to the same id: union provenance, merge data
-      // fields, and union aliases (aliases live inside data).
+      // two surface forms normalized to the same id (a merge, or just casing): union
+      // provenance, merge data fields, and union aliases (aliases live inside data).
       existing.source_claim_ids = Array.from(new Set([...existing.source_claim_ids, ...cited]))
-      const mergedAliases = uniqueStrings([...uniqueStrings(existing.data.aliases), ...uniqueStrings(node.aliases)])
+      const mergedAliases = uniqueStrings([...uniqueStrings(existing.data.aliases), ...nodeAliases])
       existing.data = { ...existing.data, ...nodeData, aliases: mergedAliases }
       existing.salience = salienceFrom(existing.source_claim_ids.length)
       continue
@@ -133,7 +154,7 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
       id,
       user_id: userId,
       label: name,
-      data: { ...nodeData, aliases: uniqueStrings(node.aliases) },
+      data: { ...nodeData, aliases: nodeAliases },
       source_claim_ids: cited,
       temporality: temporality(node.temporality, cfg.defaultTemporality),
       confidence: round3(clamp01(node.confidence, 0.7)),
@@ -378,6 +399,11 @@ export async function runDerivation(userId: string): Promise<PassResult[]> {
     })
   }
 
+  // People-identity corrections (renames, merges) are read once and applied as a
+  // label rewrite in the people pass, then enforced by superseding the stale rows.
+  const corrections = await readPeopleCorrections(userId)
+  const peopleRewrite = buildPeopleRewrite(userId, corrections)
+
   // Stage A: people + places/orgs (independent, run concurrently). These resolve
   // first; everything downstream references them.
   const aPeople = await runNodePass(userId, {
@@ -386,6 +412,7 @@ export async function runDerivation(userId: string): Promise<PassResult[]> {
     defaultTemporality: 'evergreen',
     system: STAGE_A_PEOPLE_PROMPT,
     context: [],
+    peopleRewrite,
   })
   const aPlaces = await runNodePass(userId, {
     rawTable: 'raw_places_orgs',
@@ -396,6 +423,10 @@ export async function runDerivation(userId: string): Promise<PassResult[]> {
   })
   await record('stage_a', aPeople)
   await record('stage_a', aPlaces)
+
+  // Retire the merged-away loser person rows BEFORE downstream context is read, so
+  // B and C never see a superseded identity. Idempotent: a no-op once applied.
+  const losersSuperseded = await supersedeLosers(userId, peopleRewrite.loserToSurvivor)
 
   // Resolved Stage A node set, used as reference context for B and C.
   const aNodes = [
@@ -448,6 +479,30 @@ export async function runDerivation(userId: string): Promise<PassResult[]> {
 
   const cInsights = await runInsightsPass(userId, allNodes)
   await record('stage_c', cInsights)
+
+  // After re-resolution, clean up downstream references to a merged-away person.
+  // Relationship edges are keyed on their endpoints, so the stale loser edge is
+  // retired (the survivor edge was re-emitted under a new id). Label-keyed rows
+  // (commitments, projects, events, insights) keep the same id across a person
+  // merge, so their embedded person reference is repointed in place.
+  const relationshipsRetired = await retireStaleRelationships(userId, new Set(peopleRewrite.loserToSurvivor.keys()))
+  const referencesRepointed = await repointReferences(userId, peopleRewrite.loserToSurvivor)
+
+  if (corrections.length > 0) {
+    await logEvent({
+      user_id: userId,
+      event_type: 'corrections_applied',
+      name: 'people',
+      attrs: {
+        corrections: corrections.length,
+        rewrites: peopleRewrite.labelToFinal.size,
+        losers: peopleRewrite.loserToSurvivor.size,
+        losers_superseded: losersSuperseded,
+        relationships_retired: relationshipsRetired,
+        references_repointed: referencesRepointed,
+      },
+    })
+  }
 
   return results
 }
