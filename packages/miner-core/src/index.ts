@@ -8,4 +8,16 @@
 export { mine, type MineSummary } from './run'
 export { runDerivation } from './derive'
 export { extractCapture, type Capture, type ExtractResult } from './extract'
-export type { PassResult, CanonicalRow, TemporalClass, Usage } from './types'
+export type { PassResult, CanonicalRow, TemporalClass, Usage, DiscrepancyItem } from './types'
+// Freshness loop (spec §3, PR8). The pure helpers (computeSalience, newestClaimMs,
+// SALIENCE) are exported for the offline check; the DB jobs run inside the miner.
+export {
+  computeSalience,
+  newestClaimMs,
+  planSupersessions,
+  loadClaimDates,
+  reconcileFreshness,
+  supersedeFromDiscrepancies,
+  SALIENCE,
+  type SalienceSignals,
+} from './freshness'
