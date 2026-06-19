@@ -207,13 +207,13 @@ export type ChatResult = {
   truncated: boolean
 }
 
-function baseParams(messages: Anthropic.MessageParam[], toolChoiceNone = false) {
+function baseParams(messages: Anthropic.MessageParam[], system: string, toolChoiceNone = false) {
   return {
     model: MODEL,
     max_tokens: MAX_TOKENS,
     thinking: { type: 'adaptive' },
     output_config: { effort: EFFORT },
-    system: [{ type: 'text', text: CHAT_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+    system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
     tools: TOOLS,
     // tool_choice 'none' forces a text answer from the context already gathered.
     ...(toolChoiceNone ? { tool_choice: { type: 'none' } } : {}),
@@ -249,8 +249,10 @@ export async function runChat(opts: {
   userId: string
   turns: ChatTurn[]
   onText?: (delta: string) => void
+  systemPrompt?: string
 }): Promise<ChatResult> {
   const deps: RetrievalDeps = { supabase: opts.supabase, userId: opts.userId }
+  const system = opts.systemPrompt ?? CHAT_SYSTEM_PROMPT
   const messages: Anthropic.MessageParam[] = opts.turns.map((t) => ({ role: t.role, content: t.content }))
   const toolCalls: ChatResult['toolCalls'] = []
   const usage: Usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -262,7 +264,7 @@ export async function runChat(opts: {
   while (iterations < MAX_ITERATIONS) {
     iterations++
     const msg = await getClient().messages.create(
-      baseParams(messages) as unknown as Anthropic.MessageCreateParamsNonStreaming
+      baseParams(messages, system) as unknown as Anthropic.MessageCreateParamsNonStreaming
     )
     addUsage(usage, msg.usage)
 
@@ -313,7 +315,7 @@ export async function runChat(opts: {
     capHit = true
     try {
       const forced = await getClient().messages.create(
-        baseParams(messages, true) as unknown as Anthropic.MessageCreateParamsNonStreaming
+        baseParams(messages, system, true) as unknown as Anthropic.MessageCreateParamsNonStreaming
       )
       addUsage(usage, forced.usage)
       answer = textOf(forced)

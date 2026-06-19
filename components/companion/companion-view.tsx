@@ -1,132 +1,95 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { FollowUp, Today, UpcomingEvent } from '@/lib/companion/today'
-import {
-  createEventAction,
-  draftCalendarAction,
-  draftEmailAction,
-  sendEmailAction,
-  setCommitmentState,
-} from '@/app/companion/actions'
+import type { RelationshipNudge } from '@/lib/companion/nudges'
+import { setCommitmentState } from '@/app/companion/actions'
 
-type Connection = { connected: boolean; email: string | null; configured: boolean }
+// Warm, neutral placeholder palette (no purple). Temporary direction only; the
+// real styling is a V1 pass, so this is plain inline styling, not a theme layer.
+const CARD = '#fffdf7'
+const ACCENT = '#b07a14'
+const ACCENT_SOFT = '#f4ead0'
+const INK = '#2c2a25'
+const MUTED = '#6f6a5f'
+const LINE = '#e7ddc7'
 
-const NOTICES: Record<string, string> = {
-  connected: 'Google connected.',
-  disconnected: 'Google disconnected.',
-  denied: 'Google connection was cancelled.',
-  error: 'Could not complete the Google connection.',
-  state_mismatch: 'The connection request expired. Try again.',
-  unconfigured: 'Google actions are not configured on this server.',
+const btn: React.CSSProperties = {
+  border: `1px solid ${LINE}`,
+  background: '#fffefb',
+  color: INK,
+  borderRadius: 999,
+  padding: '4px 12px',
+  cursor: 'pointer',
+  fontSize: 13,
 }
+const accentBtn: React.CSSProperties = { ...btn, background: ACCENT_SOFT, borderColor: ACCENT, color: ACCENT }
 
-export function CompanionView({
-  today,
-  connection,
-  googleNotice,
-}: {
-  today: Today
-  connection: Connection
-  googleNotice: string | null
-}) {
-  const notice = googleNotice ? NOTICES[googleNotice] ?? null : null
+export function CompanionView({ today }: { today: Today }) {
+  const empty =
+    today.counts.active === 0 && today.counts.snoozed === 0 && today.relationshipNudges.length === 0
+
   return (
-    <div>
-      <ConnectionBanner connection={connection} />
-      {notice ? <p style={{ color: '#0a6' }}>{notice}</p> : null}
+    <div style={{ color: INK }}>
+      <FollowUpGroup title="Overdue" items={today.overdue} />
+      <FollowUpGroup title="Soon" items={today.soon} />
+      <FollowUpGroup title="Open" items={today.open} />
 
-      <Group title="Overdue" items={today.overdue} connection={connection} />
-      <Group title="Soon" items={today.soon} connection={connection} />
-      <Group title="Open" items={today.open} connection={connection} />
+      {today.relationshipNudges.length > 0 ? <Nudges nudges={today.relationshipNudges} /> : null}
 
       {today.snoozed.length > 0 ? (
-        <details style={{ marginTop: 16 }}>
-          <summary>Snoozed ({today.snoozed.length})</summary>
-          <Group title="" items={today.snoozed} connection={connection} />
+        <details style={{ marginTop: 18 }}>
+          <summary style={{ color: MUTED }}>Snoozed ({today.snoozed.length})</summary>
+          <FollowUpGroup title="" items={today.snoozed} />
         </details>
       ) : null}
 
-      {today.counts.active === 0 ? (
-        <p style={{ color: '#888' }}>Nothing needs attention right now.</p>
-      ) : null}
+      {empty ? <p style={{ color: MUTED }}>Nothing to follow up on right now.</p> : null}
 
-      {today.upcomingEvents.length > 0 ? <UpcomingEvents events={today.upcomingEvents} /> : null}
+      {today.upcomingEvents.length > 0 ? <Upcoming events={today.upcomingEvents} /> : null}
     </div>
   )
 }
 
-function ConnectionBanner({ connection }: { connection: Connection }) {
-  if (!connection.configured) {
-    return (
-      <p style={{ background: '#fff8e1', padding: 10, borderRadius: 8, fontSize: 13 }}>
-        Email and calendar actions are not configured on this server. The rest of the view works; set
-        up the Google connection to draft and send.
-      </p>
-    )
-  }
-  if (!connection.connected) {
-    return (
-      <p style={{ background: '#f0f4ff', padding: 10, borderRadius: 8, fontSize: 13 }}>
-        Connect Gmail and Calendar to draft and send follow-ups.{' '}
-        <a href="/api/google/connect">Connect Google</a>
-      </p>
-    )
-  }
-  return (
-    <p style={{ background: '#f3fbf3', padding: 10, borderRadius: 8, fontSize: 13 }}>
-      Connected as {connection.email ?? 'your Google account'}.{' '}
-      <form action="/api/google/disconnect" method="post" style={{ display: 'inline' }}>
-        <button type="submit" style={{ border: 'none', background: 'none', color: '#06c', cursor: 'pointer', padding: 0 }}>
-          Disconnect
-        </button>
-      </form>
-    </p>
-  )
-}
-
-function Group({ title, items, connection }: { title: string; items: FollowUp[]; connection: Connection }) {
+function FollowUpGroup({ title, items }: { title: string; items: FollowUp[] }) {
   if (items.length === 0) return null
   return (
-    <section style={{ marginTop: 16 }}>
-      {title ? <h2 style={{ fontSize: 16, marginBottom: 8 }}>{title}</h2> : null}
-      <div style={{ display: 'grid', gap: 8 }}>
+    <section style={{ marginTop: 18 }}>
+      {title ? <h2 style={{ fontSize: 15, color: ACCENT, margin: '0 0 8px' }}>{title}</h2> : null}
+      <div style={{ display: 'grid', gap: 10 }}>
         {items.map((it) => (
-          <FollowUpItem key={it.commitmentId} item={it} connection={connection} />
+          <FollowUpCard key={it.commitmentId} item={it} />
         ))}
       </div>
     </section>
   )
 }
 
-type Mode = null | 'email' | 'calendar'
+function Card({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, padding: '12px 14px' }}>{children}</div>
+  )
+}
 
-function FollowUpItem({ item, connection }: { item: FollowUp; connection: Connection }) {
+function FollowUpCard({ item }: { item: FollowUp }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
-  const [mode, setMode] = useState<Mode>(null)
   const [err, setErr] = useState('')
-
-  // email draft fields
-  const [to, setTo] = useState('')
-  const [subject, setSubject] = useState('')
-  const [body, setBody] = useState('')
-  // calendar draft fields
-  const [title, setTitle] = useState('')
-  const [startLocal, setStartLocal] = useState('')
-  const [duration, setDuration] = useState(30)
-  const [attendee, setAttendee] = useState('')
-  const [description, setDescription] = useState('')
-
-  const [sentMsg, setSentMsg] = useState('')
+  const [brainstorm, setBrainstorm] = useState(false)
 
   async function changeState(state: 'done' | 'snoozed' | 'dismissed') {
     if (busy) return
     setBusy(true)
     setErr('')
     try {
-      const res = await setCommitmentState({ commitmentId: item.commitmentId, state, snoozeDays: 3 })
+      const res = await setCommitmentState({
+        commitmentId: item.commitmentId,
+        state,
+        snoozeDays: 3,
+        matchLabel: item.headline,
+        matchPersonId: item.person?.id ?? null,
+      })
       if (!res.ok) throw new Error(res.error || 'could not update')
       router.refresh()
     } catch (e) {
@@ -136,168 +99,190 @@ function FollowUpItem({ item, connection }: { item: FollowUp; connection: Connec
     }
   }
 
-  async function openDraft(kind: 'email' | 'calendar') {
-    if (busy) return
-    setErr('')
-    setSentMsg('')
-    setBusy(true)
-    try {
-      const res = kind === 'email' ? await draftEmailAction({ commitmentId: item.commitmentId }) : await draftCalendarAction({ commitmentId: item.commitmentId })
-      if (!res.ok) throw new Error(res.error)
-      if (res.kind === 'email') {
-        setSubject(res.draft.subject)
-        setBody(res.draft.body)
-        setMode('email')
-      } else {
-        setTitle(res.draft.title)
-        setDuration(res.draft.durationMinutes)
-        setDescription(res.draft.description)
-        setMode('calendar')
-      }
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
+  const seed = `${item.headline}. ${item.suggestion}`
 
-  async function sendEmail() {
-    if (busy) return
-    setErr('')
-    setBusy(true)
-    try {
-      const res = await sendEmailAction({ commitmentId: item.commitmentId, to, subject, body, confirm: true })
-      if (!res.ok) {
-        if (res.needsConnect) throw new Error('Connect Google first (link at the top).')
-        throw new Error(res.error || 'send failed')
-      }
-      setSentMsg('Email sent.')
-      setMode(null)
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
+  return (
+    <Card>
+      <div style={{ fontWeight: 600 }}>{item.headline}</div>
+      <div style={{ color: MUTED, fontSize: 14, marginTop: 2 }}>{item.suggestion}</div>
+      {item.provenance ? <div style={{ color: '#a59c86', fontSize: 12, marginTop: 2 }}>{item.provenance}</div> : null}
 
-  async function createEvent() {
-    if (busy) return
-    setErr('')
-    if (!startLocal) {
-      setErr('pick a start time')
-      return
-    }
+      <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+        <button type="button" style={btn} onClick={() => changeState('done')} disabled={busy}>
+          Done
+        </button>
+        <button type="button" style={btn} onClick={() => changeState('snoozed')} disabled={busy}>
+          Snooze 3d
+        </button>
+        <button type="button" style={btn} onClick={() => changeState('dismissed')} disabled={busy}>
+          Dismiss
+        </button>
+        <button type="button" style={accentBtn} onClick={() => setBrainstorm((b) => !b)} disabled={busy}>
+          {brainstorm ? 'Close' : 'Think it through'}
+        </button>
+      </div>
+
+      {brainstorm ? <BrainstormPanel seed={seed} /> : null}
+      {err ? <p style={{ color: 'crimson', fontSize: 13, margin: '6px 0 0' }}>{err}</p> : null}
+    </Card>
+  )
+}
+
+function Nudges({ nudges }: { nudges: RelationshipNudge[] }) {
+  return (
+    <section style={{ marginTop: 22 }}>
+      <h2 style={{ fontSize: 15, color: ACCENT, margin: '0 0 8px' }}>People worth a nudge</h2>
+      <div style={{ display: 'grid', gap: 10 }}>
+        {nudges.map((n) => (
+          <NudgeCard key={n.personId} nudge={n} />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function NudgeCard({ nudge }: { nudge: RelationshipNudge }) {
+  const [brainstorm, setBrainstorm] = useState(false)
+  const seed = `Reconnecting with ${nudge.name ?? 'someone close'} (${nudge.descriptor}). ${nudge.suggestion}`
+  return (
+    <Card>
+      <div style={{ fontWeight: 600 }}>{nudge.name ?? 'Someone close'}</div>
+      <div style={{ color: MUTED, fontSize: 14, marginTop: 2 }}>{nudge.suggestion}</div>
+      {nudge.provenance ? <div style={{ color: '#a59c86', fontSize: 12, marginTop: 2 }}>{nudge.provenance}</div> : null}
+      <div style={{ marginTop: 10 }}>
+        <button type="button" style={accentBtn} onClick={() => setBrainstorm((b) => !b)}>
+          {brainstorm ? 'Close' : 'Think it through'}
+        </button>
+      </div>
+      {brainstorm ? <BrainstormPanel seed={seed} /> : null}
+    </Card>
+  )
+}
+
+type Msg = { role: 'user' | 'assistant'; content: string }
+
+// A short brainstorm conversation about one follow-up. Auto-opens with one message
+// so the companion starts, then the user can continue. It only suggests; the
+// /api/companion/brainstorm route never sends anything.
+function BrainstormPanel({ seed }: { seed: string }) {
+  const [messages, setMessages] = useState<Msg[]>([])
+  const [input, setInput] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const started = useRef(false)
+
+  async function send(history: Msg[]) {
     setBusy(true)
+    setErr('')
+    setMessages((m) => [...m, { role: 'assistant', content: '' }])
     try {
-      const startISO = new Date(startLocal).toISOString()
-      const res = await createEventAction({
-        commitmentId: item.commitmentId,
-        title,
-        startISO,
-        durationMinutes: duration,
-        attendee: attendee || undefined,
-        description,
-        confirm: true,
+      const res = await fetch('/api/companion/brainstorm', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ seed, messages: history }),
       })
-      if (!res.ok) {
-        if (res.needsConnect) throw new Error('Connect Google first (link at the top).')
-        throw new Error(res.error || 'create failed')
+      if (!res.ok || !res.body) {
+        let detail = `request failed (${res.status})`
+        try {
+          const j = (await res.json()) as { error?: string }
+          if (j.error) detail = j.error
+        } catch {
+          // keep status
+        }
+        throw new Error(detail)
       }
-      setSentMsg('Event created.')
-      setMode(null)
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let acc = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        acc += decoder.decode(value, { stream: true })
+        setMessages((m) => {
+          const copy = m.slice()
+          copy[copy.length - 1] = { role: 'assistant', content: acc }
+          return copy
+        })
+      }
+      if (!acc.trim()) {
+        setMessages((m) => {
+          const copy = m.slice()
+          copy[copy.length - 1] = { role: 'assistant', content: '(no response)' }
+          return copy
+        })
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
+      setMessages((m) => (m.length && m[m.length - 1].role === 'assistant' && !m[m.length - 1].content ? m.slice(0, -1) : m))
     } finally {
       setBusy(false)
     }
+  }
+
+  useEffect(() => {
+    if (started.current) return
+    started.current = true
+    const first: Msg[] = [{ role: 'user', content: 'Help me think through what to do here.' }]
+    setMessages(first)
+    void send(first)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function onSubmit() {
+    const text = input.trim()
+    if (!text || busy) return
+    setInput('')
+    const next: Msg[] = [...messages, { role: 'user', content: text }]
+    setMessages(next)
+    void send(next)
   }
 
   return (
-    <div style={{ border: '1px solid #e5e5e5', borderRadius: 8, padding: '10px 12px' }}>
-      <div style={{ fontWeight: 600 }}>{item.label ?? '(untitled)'}</div>
-      <div style={{ fontSize: 13, color: '#555' }}>
-        {item.person?.label ? `for ${item.person.label}` : 'no person'}
-        {item.due ? ` / due ${item.due}` : ''}
-        {item.person?.workOrPersonal ? ` / ${item.person.workOrPersonal}` : ''}
-      </div>
-      {item.provenance ? <div style={{ fontSize: 12, color: '#999' }}>{item.provenance}</div> : null}
-
-      <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-        <button type="button" onClick={() => changeState('done')} disabled={busy}>
-          Done
-        </button>
-        <button type="button" onClick={() => changeState('snoozed')} disabled={busy}>
-          Snooze 3d
-        </button>
-        <button type="button" onClick={() => changeState('dismissed')} disabled={busy}>
-          Dismiss
-        </button>
-        <button type="button" onClick={() => openDraft('email')} disabled={busy}>
-          Draft email
-        </button>
-        <button type="button" onClick={() => openDraft('calendar')} disabled={busy}>
-          Draft invite
-        </button>
-      </div>
-
-      {mode === 'email' ? (
-        <div style={{ marginTop: 10, display: 'grid', gap: 6, background: '#fafafa', padding: 10, borderRadius: 8 }}>
-          <strong style={{ fontSize: 13 }}>Review and send</strong>
-          <input placeholder="recipient@example.com" value={to} onChange={(e) => setTo(e.target.value)} style={{ padding: 6 }} />
-          <input placeholder="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} style={{ padding: 6 }} />
-          <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={6} style={{ padding: 6 }} />
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" onClick={sendEmail} disabled={busy || !connection.connected}>
-              {connection.connected ? 'Send email' : 'Connect Google to send'}
-            </button>
-            <button type="button" onClick={() => setMode(null)} disabled={busy}>
-              Cancel
-            </button>
+    <div style={{ marginTop: 10, background: '#fffefb', border: `1px solid ${LINE}`, borderRadius: 10, padding: 10 }}>
+      <div style={{ maxHeight: 280, overflowY: 'auto', display: 'grid', gap: 6 }}>
+        {messages.map((m, i) => (
+          <div key={i}>
+            <strong style={{ color: m.role === 'user' ? INK : ACCENT, fontSize: 13 }}>
+              {m.role === 'user' ? 'You' : 'Memo'}:
+            </strong>{' '}
+            <span style={{ whiteSpace: 'pre-wrap', fontSize: 14 }}>
+              {m.content || (busy && i === messages.length - 1 ? 'thinking...' : '')}
+            </span>
           </div>
-        </div>
-      ) : null}
-
-      {mode === 'calendar' ? (
-        <div style={{ marginTop: 10, display: 'grid', gap: 6, background: '#fafafa', padding: 10, borderRadius: 8 }}>
-          <strong style={{ fontSize: 13 }}>Review and create</strong>
-          <input placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} style={{ padding: 6 }} />
-          <label style={{ fontSize: 13 }}>
-            Start{' '}
-            <input type="datetime-local" value={startLocal} onChange={(e) => setStartLocal(e.target.value)} />
-          </label>
-          <label style={{ fontSize: 13 }}>
-            Minutes{' '}
-            <input type="number" value={duration} min={5} onChange={(e) => setDuration(Number(e.target.value) || 30)} style={{ width: 70 }} />
-          </label>
-          <input placeholder="attendee@example.com (optional)" value={attendee} onChange={(e) => setAttendee(e.target.value)} style={{ padding: 6 }} />
-          <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} style={{ padding: 6 }} />
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" onClick={createEvent} disabled={busy || !connection.connected}>
-              {connection.connected ? 'Create event' : 'Connect Google to create'}
-            </button>
-            <button type="button" onClick={() => setMode(null)} disabled={busy}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {sentMsg ? <p style={{ color: 'green', fontSize: 13, margin: '6px 0 0' }}>{sentMsg}</p> : null}
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              onSubmit()
+            }
+          }}
+          placeholder="Ask Memo..."
+          style={{ flex: 1, padding: 6, border: `1px solid ${LINE}`, borderRadius: 8 }}
+        />
+        <button type="button" style={accentBtn} onClick={onSubmit} disabled={busy || !input.trim()}>
+          Send
+        </button>
+      </div>
       {err ? <p style={{ color: 'crimson', fontSize: 13, margin: '6px 0 0' }}>{err}</p> : null}
     </div>
   )
 }
 
-function UpcomingEvents({ events }: { events: UpcomingEvent[] }) {
+function Upcoming({ events }: { events: UpcomingEvent[] }) {
   return (
-    <section style={{ marginTop: 20 }}>
-      <h2 style={{ fontSize: 16 }}>Coming up</h2>
-      <ul style={{ display: 'grid', gap: 4, paddingLeft: 18 }}>
+    <section style={{ marginTop: 22 }}>
+      <h2 style={{ fontSize: 15, color: ACCENT }}>Coming up</h2>
+      <ul style={{ display: 'grid', gap: 4, paddingLeft: 18, color: MUTED }}>
         {events.map((e) => (
           <li key={e.id}>
             {e.label}
-            {e.date ? <span style={{ color: '#777' }}> ({String(e.date)})</span> : null}
-            {e.location ? <span style={{ color: '#999' }}> at {String(e.location)}</span> : null}
+            {e.date ? <span> ({String(e.date)})</span> : null}
+            {e.location ? <span> at {String(e.location)}</span> : null}
           </li>
         ))}
       </ul>
