@@ -1,7 +1,12 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { composeBrief, composePersonBrief, composeTopicBrief, type Brief } from '@/lib/interview/briefing'
-import { composeSystemPrompt, firstMessage } from '@/lib/interview/compose'
+import {
+  composeSystemPrompt,
+  composeOnboardingSystemPrompt,
+  firstMessage,
+  type InterviewMode,
+} from '@/lib/interview/compose'
 import { getSignedUrl } from '@/lib/elevenlabs'
 import { logEvent } from '@/lib/telemetry'
 
@@ -23,7 +28,10 @@ export async function POST(request: NextRequest) {
     target?: { kind?: string; id?: string; seed?: string }
   }
   const target = body.target
-  let mode: 'open' | 'daily' = body.mode === 'daily' ? 'daily' : 'open'
+  // Onboarding (first-run) is its own mode: a warm, broad first life overview with
+  // no brief (the graph is empty), using the isolated onboarding bible.
+  const isOnboarding = body.mode === 'onboarding'
+  let mode: InterviewMode = isOnboarding ? 'onboarding' : body.mode === 'daily' ? 'daily' : 'open'
 
   // The brief is the injection seed. A daily interview scans the graph; a targeted
   // interview (capture-with-target) seeds the same DAILY_BRIEF slot with a specific
@@ -60,10 +68,17 @@ export async function POST(request: NextRequest) {
   // graph or a briefing error): the bible reads an empty brief as open mode, so
   // the first message must match the EFFECTIVE mode, not just the requested one.
   const hasBrief = brief.text.trim().length > 0
-  const effectiveMode: 'open' | 'daily' = mode === 'daily' && hasBrief ? 'daily' : 'open'
+  const effectiveMode: InterviewMode = isOnboarding
+    ? 'onboarding'
+    : mode === 'daily' && hasBrief
+      ? 'daily'
+      : 'open'
 
+  const now = new Date()
   const userName = process.env.MEMO_USER_NAME || user.email?.split('@')[0] || 'there'
-  const systemPrompt = composeSystemPrompt({ userName, brief: brief.text, now: new Date() })
+  const systemPrompt = isOnboarding
+    ? composeOnboardingSystemPrompt({ userName, now })
+    : composeSystemPrompt({ userName, brief: brief.text, now })
   const first = firstMessage(effectiveMode)
 
   // For daily mode store the brief object even when empty, so the record is never

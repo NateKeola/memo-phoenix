@@ -67,3 +67,83 @@ export async function mine(userId: string, startedAtMs: number): Promise<MineSum
 
   return summary
 }
+
+export type MineRunResult =
+  | { status: 'done'; runId: string; summary: MineSummary }
+  | { status: 'error'; runId: string; error: string }
+  | { status: 'already_running' }
+
+// A crashed run (a serverless function hard-killed at the timeout, say) can leave
+// a 'running' row that never reaches 'done'. Reclaim one older than this so it
+// cannot block the user forever.
+const STALE_RUN_MS = Number(process.env.MINER_STALE_RUN_MS) || 20 * 60 * 1000
+
+// The concurrency guard. Wraps mine() in a miner_runs row that doubles as the lock
+// (the partial unique index allows at most one status='running' per user), the
+// audit trail, and the status the "building your memory" UI polls. Both the Vercel
+// run route and the CLI (local or GitHub Action) go through this, so two runs for
+// the same user can never collide regardless of which runtime triggered them.
+export async function mineWithLock(
+  userId: string,
+  opts: { trigger: string; runtime: string }
+): Promise<MineRunResult> {
+  const db = admin()
+
+  // Reclaim a stale run before trying to acquire.
+  const { data: active } = await db
+    .from('miner_runs')
+    .select('id, started_at')
+    .eq('user_id', userId)
+    .eq('status', 'running')
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (active) {
+    const ageMs = Date.now() - new Date(active.started_at as string).getTime()
+    if (ageMs < STALE_RUN_MS) return { status: 'already_running' }
+    await db
+      .from('miner_runs')
+      .update({ status: 'error', error: 'stale run reclaimed', ended_at: new Date().toISOString() })
+      .eq('id', active.id)
+      .eq('status', 'running')
+  }
+
+  const { data: runRow, error: lockErr } = await db
+    .from('miner_runs')
+    .insert({ user_id: userId, status: 'running', trigger: opts.trigger, runtime: opts.runtime })
+    .select('id')
+    .single()
+  if (lockErr) {
+    const code = (lockErr as { code?: string }).code
+    // 23505 = the partial unique index fired => a concurrent run already holds it.
+    if (code === '23505') return { status: 'already_running' }
+    // Table missing (DB not yet migrated): degrade to an unlocked mine so the CLI
+    // still works, matching the project's graceful-degradation pattern.
+    if (code === '42P01' || code === 'PGRST205') {
+      const started = Date.now()
+      const summary = await mine(userId, started)
+      summary.durationMs = Date.now() - started
+      return { status: 'done', runId: '(unlocked)', summary }
+    }
+    throw new Error(`[miner] could not acquire run lock: ${lockErr.message}`)
+  }
+  const runId = (runRow as { id: string }).id
+
+  const started = Date.now()
+  try {
+    const summary = await mine(userId, started)
+    summary.durationMs = Date.now() - started
+    await db
+      .from('miner_runs')
+      .update({ status: 'done', summary, ended_at: new Date().toISOString() })
+      .eq('id', runId)
+    return { status: 'done', runId, summary }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    await db
+      .from('miner_runs')
+      .update({ status: 'error', error: msg.slice(0, 1000), ended_at: new Date().toISOString() })
+      .eq('id', runId)
+    return { status: 'error', runId, error: msg }
+  }
+}

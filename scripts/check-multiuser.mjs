@@ -100,7 +100,7 @@ async function deleteTestUser(email) {
 
 async function deleteTestRowsFor(userId) {
   // delete only mutable rows we created; never touch append-only ground truth
-  for (const table of ['companion_state', 'canonical_people', 'canonical_commitments', 'canonical_facts']) {
+  for (const table of ['companion_state', 'canonical_people', 'canonical_commitments', 'canonical_facts', 'invites', 'miner_runs']) {
     await svc('DELETE', `${table}?user_id=eq.${userId}`)
   }
 }
@@ -127,6 +127,9 @@ async function main() {
     { table: 'canonical_people', row: { user_id: uid, label: `${MARK}-person-${who}`, data: { aliases: [], note: `${MARK}-${who}` }, source_claim_ids: [], temporality: 'evergreen', confidence: 1, salience: 0.5, summary: `${MARK} ${who} secret person` } },
     { table: 'canonical_commitments', row: { user_id: uid, label: `${MARK}-commitment-${who}`, data: { status: 'open' }, source_claim_ids: [], temporality: 'dated', confidence: 1, salience: 0.5, summary: `${MARK} ${who} owes something` } },
     { table: 'canonical_facts', row: { user_id: uid, label: `${MARK}-fact-${who}`, data: { category: 'secret' }, source_claim_ids: [], temporality: 'decaying', confidence: 0.4, salience: 0.6, summary: `${MARK} ${who} private fact`, last_confirmed_at: '2026-01-01T00:00:00Z' } },
+    // B2 tables: an invite the user owns, and a completed miner run for the user.
+    { table: 'invites', row: { user_id: uid, email: `${MARK}-invite-${who}@securitytest.local`, status: 'pending' } },
+    { table: 'miner_runs', row: { user_id: uid, status: 'done', trigger: 'cli', runtime: 'local', summary: { mark: `${MARK}-${who}` } } },
   ]
   for (const { table, row } of [...mk(A, 'A'), ...mk(B, 'B')]) {
     const r = await svc('POST', table, [row], 'return=representation')
@@ -181,13 +184,30 @@ async function main() {
   const updated = Array.isArray(up.data) ? up.data.length : 0
   check('A cannot UPDATE B\'s companion_state (0 rows affected)', updated === 0, `updated ${updated}`)
 
+  console.log('\n== B2 tables: invites + miner_runs are per-user ==')
+  for (const [label, jwt, self, other] of [['A', jwtA, 'A', 'B'], ['B', jwtB, 'B', 'A']]) {
+    for (const table of ['invites', 'miner_runs']) {
+      const rows = await rowsFor(jwt, table)
+      check(`${label} sees own ${table}`, hasMark(rows, self))
+      check(`${label} CANNOT see ${other}'s ${table}`, !hasMark(rows, other), `leaked ${rows.length} rows`)
+    }
+  }
+  // miner_runs has no client write policy (service-role only writes it).
+  const mw = await asUser(jwtA, 'POST', 'miner_runs', [{ user_id: A, status: 'running', trigger: 'manual' }], 'return=representation')
+  const mwn = Array.isArray(mw.data) ? mw.data.length : 0
+  check('A cannot INSERT into miner_runs (service-role only)', mw.status >= 400 || mwn === 0, `status ${mw.status} inserted ${mwn}`)
+  // invites INSERT check forbids stamping the row as another user.
+  const iw = await asUser(jwtA, 'POST', 'invites', [{ user_id: B, email: `${MARK}-forged@securitytest.local` }], 'return=representation')
+  const iwn = Array.isArray(iw.data) ? iw.data.length : 0
+  check('A cannot INSERT an invite stamped as B', iw.status >= 400 || iwn === 0, `status ${iw.status} inserted ${iwn}`)
+
   console.log('\n== the reconfirm view is per-user (security_invoker) ==')
   const vA = await rowsFor(jwtA, 'reconfirm_candidates', 'select=*')
   check('A reconfirm view shows own decaying fact', hasMark(vA, 'A'))
   check('A reconfirm view does NOT show B\'s', !hasMark(vA, 'B'), `leaked ${vA.length}`)
 
   console.log('\n== anonymous (no JWT) sees zero rows everywhere ==')
-  for (const table of ['captures', 'canonical_people', 'canonical_facts', 'companion_state', 'reconfirm_candidates', 'telemetry_events']) {
+  for (const table of ['captures', 'canonical_people', 'canonical_facts', 'companion_state', 'reconfirm_candidates', 'telemetry_events', 'invites', 'miner_runs']) {
     const r = await asAnon('GET', `${table}?select=*`)
     const n = Array.isArray(r.data) ? r.data.length : -1
     check(`anon sees 0 rows in ${table}`, n === 0, `status ${r.status} got ${n} (${JSON.stringify(r.data).slice(0,80)})`)
