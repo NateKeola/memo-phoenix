@@ -30,29 +30,167 @@ const btn: React.CSSProperties = {
 const accentBtn: React.CSSProperties = { ...btn, background: ACCENT_SOFT, borderColor: ACCENT, color: ACCENT }
 
 export function CompanionView({ today }: { today: Today }) {
-  const empty =
-    today.counts.active === 0 && today.counts.snoozed === 0 && today.relationshipNudges.length === 0
-
   const people = today.people
+  const [q, setQ] = useState('')
+  const [status, setStatus] = useState<'all' | 'open' | 'done'>('all')
+  const [ts, setTs] = useState<'all' | 'yes' | 'no'>('all')
+  const [personId, setPersonId] = useState('all')
+
+  const queryActive = q.trim() !== '' || status !== 'all' || ts !== 'all' || personId !== 'all'
+  // Deterministic, client-side filter over the already RLS-scoped follow-up set.
+  const filtered = today.all.filter((it) => {
+    if (status === 'open' && it.status === 'done') return false
+    if (status === 'done' && it.status !== 'done') return false
+    if (ts === 'yes' && !it.timeSensitive) return false
+    if (ts === 'no' && it.timeSensitive) return false
+    if (personId !== 'all' && it.person?.id !== personId) return false
+    if (q.trim()) {
+      const hay = `${it.headline} ${it.suggestion} ${it.person?.label ?? ''}`.toLowerCase()
+      if (!hay.includes(q.trim().toLowerCase())) return false
+    }
+    return true
+  })
+
+  const empty =
+    today.counts.active === 0 &&
+    today.counts.snoozed === 0 &&
+    today.counts.past === 0 &&
+    today.relationshipNudges.length === 0
+
+  const clear = () => {
+    setQ('')
+    setStatus('all')
+    setTs('all')
+    setPersonId('all')
+  }
+
   return (
     <div style={{ color: INK }}>
-      <FollowUpGroup title="Overdue" items={today.overdue} people={people} />
-      <FollowUpGroup title="Soon" items={today.soon} people={people} />
-      <FollowUpGroup title="Open" items={today.open} people={people} />
+      <QueryBar
+        q={q}
+        setQ={setQ}
+        status={status}
+        setStatus={setStatus}
+        ts={ts}
+        setTs={setTs}
+        personId={personId}
+        setPersonId={setPersonId}
+        people={people}
+        active={queryActive}
+        onClear={clear}
+      />
 
-      {today.relationshipNudges.length > 0 ? <Nudges nudges={today.relationshipNudges} /> : null}
+      {queryActive ? (
+        <section style={{ marginTop: 14 }}>
+          <h2 style={{ fontSize: 15, color: ACCENT, margin: '0 0 8px' }}>Results ({filtered.length})</h2>
+          {filtered.length === 0 ? (
+            <p style={{ color: MUTED }}>No follow-ups match.</p>
+          ) : (
+            <div style={{ display: 'grid', gap: 10 }}>
+              {filtered.map((it) => (
+                <FollowUpCard key={it.commitmentId} item={it} people={people} />
+              ))}
+            </div>
+          )}
+        </section>
+      ) : (
+        <>
+          <FollowUpGroup title="Overdue" items={today.overdue} people={people} />
+          <FollowUpGroup title="Soon" items={today.soon} people={people} />
+          <FollowUpGroup title="Open" items={today.open} people={people} />
 
-      {today.snoozed.length > 0 ? (
-        <details style={{ marginTop: 18 }}>
-          <summary style={{ color: MUTED }}>Snoozed ({today.snoozed.length})</summary>
-          <FollowUpGroup title="" items={today.snoozed} people={people} />
-        </details>
-      ) : null}
+          {today.relationshipNudges.length > 0 ? <Nudges nudges={today.relationshipNudges} /> : null}
 
-      {empty ? <p style={{ color: MUTED }}>Nothing to follow up on right now.</p> : null}
+          {today.snoozed.length > 0 ? (
+            <details style={{ marginTop: 18 }}>
+              <summary style={{ color: MUTED }}>Snoozed ({today.snoozed.length})</summary>
+              <FollowUpGroup title="" items={today.snoozed} people={people} />
+            </details>
+          ) : null}
 
-      {today.upcomingEvents.length > 0 ? <Upcoming events={today.upcomingEvents} /> : null}
+          {today.past.length > 0 ? (
+            <details style={{ marginTop: 18 }}>
+              <summary style={{ color: MUTED }}>
+                Past ({today.past.length}) - time-sensitive, deadline passed
+              </summary>
+              <FollowUpGroup title="" items={today.past} people={people} />
+            </details>
+          ) : null}
+
+          {empty ? <p style={{ color: MUTED }}>Nothing to follow up on right now.</p> : null}
+
+          {today.upcomingEvents.length > 0 ? <Upcoming events={today.upcomingEvents} /> : null}
+        </>
+      )}
     </div>
+  )
+}
+
+function QueryBar({
+  q,
+  setQ,
+  status,
+  setStatus,
+  ts,
+  setTs,
+  personId,
+  setPersonId,
+  people,
+  active,
+  onClear,
+}: {
+  q: string
+  setQ: (v: string) => void
+  status: 'all' | 'open' | 'done'
+  setStatus: (v: 'all' | 'open' | 'done') => void
+  ts: 'all' | 'yes' | 'no'
+  setTs: (v: 'all' | 'yes' | 'no') => void
+  personId: string
+  setPersonId: (v: string) => void
+  people: PersonOpt[]
+  active: boolean
+  onClear: () => void
+}) {
+  return (
+    <div style={{ display: 'grid', gap: 8, marginBottom: 4 }}>
+      <input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="Search follow-ups..."
+        style={{ padding: 8, border: `1px solid ${LINE}`, borderRadius: 8, background: '#fffefb' }}
+      />
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <Chip label="Open" on={status === 'open'} onClick={() => setStatus(status === 'open' ? 'all' : 'open')} />
+        <Chip label="Done" on={status === 'done'} onClick={() => setStatus(status === 'done' ? 'all' : 'done')} />
+        <Chip label="Time-sensitive" on={ts === 'yes'} onClick={() => setTs(ts === 'yes' ? 'all' : 'yes')} />
+        <Chip label="Not time-sensitive" on={ts === 'no'} onClick={() => setTs(ts === 'no' ? 'all' : 'no')} />
+        <select
+          value={personId}
+          onChange={(e) => setPersonId(e.target.value)}
+          style={{ ...btn, cursor: 'pointer' }}
+        >
+          <option value="all">Anyone</option>
+          {people.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+        {active ? (
+          <button type="button" style={btn} onClick={onClear}>
+            Clear
+          </button>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function Chip({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} style={on ? accentBtn : btn}>
+      {label}
+    </button>
   )
 }
 
@@ -84,6 +222,9 @@ function FollowUpCard({ item, people }: { item: FollowUp; people: PersonOpt[] })
   const [planning, setPlanning] = useState(false)
   const [dueDate, setDueDate] = useState(item.dueDate ? item.dueDate.slice(0, 10) : '')
   const [linkedPersonId, setLinkedPersonId] = useState(item.linkedPerson?.id ?? '')
+  const [tsChoice, setTsChoice] = useState<'auto' | 'on' | 'off'>(
+    item.timeSensitiveOverride === true ? 'on' : item.timeSensitiveOverride === false ? 'off' : 'auto'
+  )
 
   async function savePlan() {
     if (busy) return
@@ -94,6 +235,7 @@ function FollowUpCard({ item, people }: { item: FollowUp; people: PersonOpt[] })
         commitmentId: item.commitmentId,
         dueDate: dueDate || null,
         linkedPersonId: linkedPersonId || null,
+        timeSensitive: tsChoice === 'on' ? true : tsChoice === 'off' ? false : null,
         matchLabel: item.headline,
         matchPersonId: item.person?.id ?? null,
       })
@@ -144,6 +286,12 @@ function FollowUpCard({ item, people }: { item: FollowUp; people: PersonOpt[] })
           <div style={{ fontWeight: 600 }}>{item.headline}</div>
           <div style={{ color: MUTED, fontSize: 14, marginTop: 2 }}>{item.suggestion}</div>
           {planLabel ? <div style={{ color: ACCENT, fontSize: 12, marginTop: 2 }}>{planLabel}</div> : null}
+          {item.timeSensitive ? (
+            <div style={{ fontSize: 12, marginTop: 2, color: item.passed ? '#b04a14' : ACCENT }}>
+              {item.passed ? 'deadline passed' : 'time-sensitive'}
+              {item.deadline ? ` (${item.deadline.slice(0, 10)})` : ''}
+            </div>
+          ) : null}
           {item.provenance ? <div style={{ color: '#a59c86', fontSize: 12, marginTop: 2 }}>{item.provenance}</div> : null}
         </div>
         <ContextAdder targetKind="commitment" targetId={item.commitmentId} label={item.headline} source="follow_up" compact />
@@ -170,10 +318,19 @@ function FollowUpCard({ item, people }: { item: FollowUp; people: PersonOpt[] })
       {planning ? (
         <div style={{ marginTop: 10, display: 'grid', gap: 6, background: '#fffefb', border: `1px solid ${LINE}`, borderRadius: 8, padding: 10 }}>
           <p style={{ margin: 0, fontSize: 12, color: MUTED }}>
-            Your own tracking only. This does not schedule or send anything.
+            Your own tracking only. This does not schedule or send anything. A passed deadline moves
+            this to Past, never deletes it.
           </p>
           <label style={{ fontSize: 13 }}>
-            When{' '}
+            Time-sensitive{' '}
+            <select value={tsChoice} onChange={(e) => setTsChoice(e.target.value as 'auto' | 'on' | 'off')}>
+              <option value="auto">auto (inferred)</option>
+              <option value="on">yes</option>
+              <option value="off">no</option>
+            </select>
+          </label>
+          <label style={{ fontSize: 13 }}>
+            Deadline{' '}
             <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
           </label>
           <label style={{ fontSize: 13 }}>
