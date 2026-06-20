@@ -7,6 +7,19 @@
 
 export { mine, mineWithLock, type MineSummary, type MineRunResult } from './run'
 export { runDerivation } from './derive'
+// Stable-identity resolution (deterministic-id hardening). The pure helpers are
+// exported for the offline resolution check; the DB-backed Resolver wiring runs
+// inside the miner.
+export {
+  Resolver,
+  resolveId,
+  tokens,
+  jaccard,
+  STRICT_FUZZY,
+  CONTEXT_FUZZY,
+  type ResolveCandidate,
+  type ResolveVia,
+} from './resolution'
 export { extractCapture, type Capture, type ExtractResult } from './extract'
 export type { PassResult, CanonicalRow, TemporalClass, Usage, DiscrepancyItem } from './types'
 // Freshness loop (spec §3, PR8). The pure helpers (computeSalience, newestClaimMs,
