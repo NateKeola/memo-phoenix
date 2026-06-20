@@ -6,7 +6,8 @@ committed checks any time the schema or auth config changes:
 
 ```
 node scripts/check-rls.mjs         # RLS state from the live DB (60 assertions)
-node scripts/check-multiuser.mjs   # two real users, behavioral isolation (30 assertions)
+node scripts/check-multiuser.mjs   # two real users, behavioral isolation (app/RLS paths)
+node scripts/check-miner-isolation.ts  # two users, the service-role MINER path (tsx)
 ```
 
 Verified against the dev project `azlobwtiptvarfeukzcv` on 2026-06-19. Result: the
@@ -100,6 +101,28 @@ The miner (`packages/miner-core`) is the main service-role consumer. It runs as
 
 There is no service-role path that operates across users.
 
+**Re-audited and guarded (miner-isolation hardening, 2026-06-20).** The miner is
+the main RLS-bypassing path, so it now has a dedicated, re-runnable guard
+(`scripts/check-miner-isolation.ts`) in addition to the code audit. Every `.from(`
+query in `packages/miner-core/src` was re-enumerated and confirmed to carry an
+explicit `user_id` filter, including the new PR #17 resolver: `resolve-store.ts`
+`buildResolver` (`.eq('user_id', userId)`) and `readAliasMap`
+(`.eq('user_id', userId).eq('entity_table', table)`) self-seed from and resolve
+against ONLY the target user's rows, so an alias can never match another user's.
+The canonical id is globally unique per user by construction (the user id is hashed
+into `canonicalId`/`canonicalPersonId`, and new entities mint `randomUUID()`), so the
+`onConflict:'id'` upsert can never cross users. Two defense-in-depth fixes landed:
+the `miner_runs` updates in `mineWithLock` now also filter `.eq('user_id', userId)`,
+and `mine()`/`mineWithLock()` call a hard `assertUserId` (uuid-format) guard so a
+missing or malformed user_id THROWS rather than running unscoped. The trigger paths
+are single-user only: `/api/miner/run` (one target user), the cron sweep (per-user
+Action dispatch), and `miner.yml` (a required, preflight-validated `user_id`). There
+is no global/all-users mine path. The guard creates two users, seeds distinct data
+(including a shared label and an identical alias for both), and proves two-way
+isolation across captures, raw, canonical, aliases, miner_state, and miner_runs, plus
+that the real resolver cannot resolve to the other user's id/alias and that the miner
+hard-fails without a valid user_id. Result: **33 assertions passed, 0 failed.**
+
 ## 4. Two-user behavioral test
 
 `scripts/check-multiuser.mjs` creates two real, clearly-marked test users, populates
@@ -154,3 +177,15 @@ Current state: signups DISABLED, 1 user (`natekeola@icloud.com`).
 | 6 | Public signups were ENABLED, should be closed | High (posture) | FIXED (disabled) |
 
 The data-isolation gate passes. The one access-control gap (open signups) is closed.
+
+## 7. Service-role miner path (2026-06-20 hardening)
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 7 | Every miner-pipeline query (incl. the PR #17 resolver) is explicitly user-scoped | n/a | Verified by enumeration |
+| 8 | `miner_runs` updates targeted by id only (no user_id filter) | Low (defense in depth) | FIXED (added `.eq('user_id', userId)`) |
+| 9 | `mine()` / `mineWithLock()` did not hard-fail on a missing/invalid user_id | Low (no leak, but no guard) | FIXED (`assertUserId` throws; no unscoped run) |
+| 10 | Trigger paths are single-user only; no global-mine path exists | n/a | Verified (route, cron per-user, Action required user_id) |
+| 11 | Dedicated two-way miner isolation guard | n/a | Added (`check-miner-isolation.ts`, 33/33) |
+
+The service-role miner path is now audited and guarded for per-user isolation.
