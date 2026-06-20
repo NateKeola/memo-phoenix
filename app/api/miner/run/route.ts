@@ -48,7 +48,13 @@ export async function POST(request: NextRequest) {
 
   // Offload to the GitHub Action when explicitly configured (survives a closed tab
   // and any ceiling). The Action's CLI creates and owns the miner_runs row.
-  if (process.env.MINER_USE_GITHUB_ACTION === '1' && isGithubDispatchConfigured()) {
+  //
+  // EXCEPT onboarding: the first mine runs INLINE so a brand-new user watches their
+  // initial context build in front of them (the corpus is tiny, so it is fast) and
+  // lands in a populated app, rather than waiting on an Action that spins up async.
+  const offload =
+    process.env.MINER_USE_GITHUB_ACTION === '1' && isGithubDispatchConfigured() && trigger !== 'onboarding'
+  if (offload) {
     try {
       await triggerMinerWorkflow(targetUserId, trigger)
       await logEvent({

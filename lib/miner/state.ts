@@ -7,9 +7,13 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 // it reaches AUTO_RUN_NEW_CAPTURES, an automatic mine is triggered through the same
 // /api/miner/run route + concurrency guard, recorded with trigger='auto'.
 //
+// This governs BACKGROUND re-mining during normal app use only. It does NOT gate
+// the onboarding mine (which runs at trigger='onboarding', always, the moment the
+// first conversation lands) and has nothing to do with onboarding interview length.
+//
 // Options considered (see the PR write-up for tradeoffs); pick by editing this one
 // constant (or the MINER_AUTORUN_NEW_CAPTURES env override):
-//   A. new-capture count  [CHOSEN DEFAULT = 5]  most transparent: a capture is the
+//   A. new-capture count  [CHOSEN DEFAULT = 10]  most transparent: a capture is the
 //      unit the user actually creates, so "3 of 5 new notes" is legible to them.
 //   B. new raw-row count: finer-grained, but raw rows are a miner internal, so the
 //      progress bar would count something the user never sees.
@@ -17,7 +21,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 //      when nothing changed (wasteful) and needs a scheduler to fire headlessly.
 //   D. a combination (e.g. >=N new captures OR >=T hours with >=1 new capture).
 // To change the value: edit the constant below (or set MINER_AUTORUN_NEW_CAPTURES).
-export const AUTO_RUN_NEW_CAPTURES = Number(process.env.MINER_AUTORUN_NEW_CAPTURES) || 5
+export const AUTO_RUN_NEW_CAPTURES = Number(process.env.MINER_AUTORUN_NEW_CAPTURES) || 10
 
 export type RunChanges = { inserted: number; updated: number; unchanged: number }
 

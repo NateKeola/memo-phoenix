@@ -4,14 +4,20 @@ import { useRouter } from 'next/navigation'
 import { ConversationProvider, useConversation } from '@elevenlabs/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-type Phase = 'intro' | 'connecting' | 'live' | 'saving' | 'error'
+type Phase = 'intro' | 'connecting' | 'live' | 'closing' | 'saving' | 'error'
 type Line = { role: string; text: string }
 
 // The first-run onboarding interview. Reuses the existing interview agent and the
 // open-mode mechanism (signed URL + conversation_config_override) via the same
 // /api/interview/start and /api/interview/end routes, but in mode='onboarding'
-// (the intro bible). On completion it marks the user onboarded and sends them to
-// the "building your memory" page, which kicks off the miner off the local machine.
+// (the intro bible).
+//
+// The interview never auto-ends: it runs until the user chooses to stop. When they
+// press "Ready to end the interview?", the agent is cued to deliver its warm
+// closing recap (the bible instructs this), it SPEAKS the close, and only then does
+// the session tear down. After that the user lands on the "Building your initial
+// context" screen, which mines their first conversation in front of them so the app
+// is already populated on first view.
 export function OnboardingInterview() {
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
@@ -23,6 +29,13 @@ export function OnboardingInterview() {
   )
 }
 
+// How long the agent's spoken closing must be silent before we consider it finished
+// and tear down (so the goodbye is never cut off; long enough to bridge the gap
+// between the agent's current turn and its closing turn), and a hard backstop so
+// the user is never stuck if the close never plays at all.
+const CLOSE_SILENCE_MS = 3500
+const CLOSE_HARD_TIMEOUT_MS = 18000
+
 function Inner() {
   const router = useRouter()
   const [phase, setPhase] = useState<Phase>('intro')
@@ -33,6 +46,9 @@ function Inner() {
   const convIdRef = useRef<string | null>(null)
   const linesRef = useRef<Line[]>([])
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // closing-flow refs
+  const endingRef = useRef(false)
+  const heardCloseRef = useRef(false)
 
   useEffect(
     () => () => {
@@ -48,7 +64,7 @@ function Inner() {
       setPhase('live')
     },
     onDisconnect: () => {
-      // The Finish button drives the save flow.
+      // The end controls drive the save flow.
     },
     onMessage: (m: unknown) => {
       const obj = (m ?? {}) as { message?: string; source?: string; role?: string }
@@ -126,7 +142,11 @@ function Inner() {
     }
   }, [conversation])
 
-  const finish = useCallback(async () => {
+  // Tear down + save + complete + hand off to the build screen. Guarded so the
+  // auto-end timer and the explicit "End now" button cannot both fire it.
+  const finalizeEnd = useCallback(async () => {
+    if (endingRef.current) return
+    endingRef.current = true
     setPhase('saving')
     try {
       await conversation.endSession()
@@ -134,7 +154,6 @@ function Inner() {
       // ignore; we still try to save
     }
     try {
-      // 1) write the interview capture (the seed for this user's graph)
       const endRes = await fetch('/api/interview/end', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -148,27 +167,66 @@ function Inner() {
         const j = (await endRes.json().catch(() => ({}))) as { error?: string }
         throw new Error(j.error || 'could not save the conversation')
       }
-      // 2) mark onboarding complete (releases the app gate + accepts the invite)
       const compRes = await fetch('/api/onboarding/complete', { method: 'POST' })
       if (!compRes.ok) {
         const j = (await compRes.json().catch(() => ({}))) as { error?: string }
         throw new Error(j.error || 'could not complete onboarding')
       }
-      // 3) hand off to the build page, which kicks off the miner off-machine
-      router.push('/building')
+      // hand off to the "Building your initial context" screen for the onboarding mine
+      router.push('/building?from=onboarding')
     } catch (e) {
+      endingRef.current = false
       setError(e instanceof Error ? e.message : String(e))
       setPhase('error')
     }
   }, [conversation, router])
 
+  // The user chooses to end. We do NOT tear down yet: we cue the agent to give its
+  // closing recap (the bible already instructs a warm, named recap on close) and let
+  // it SPEAK. The session ends once the close finishes (auto-detected below) or when
+  // the user presses "End now".
+  const beginClose = useCallback(() => {
+    heardCloseRef.current = false
+    setPhase('closing')
+    try {
+      conversation.sendUserMessage("I think I'm ready to wrap up for now. Thank you, this was really nice.")
+    } catch {
+      // if the cue cannot be sent, the user can still press "End now"
+    }
+  }, [conversation])
+
+  // Auto-end once the agent's closing has played: wait for it to speak, then for a
+  // short silence, then finalize. Resets the silence timer whenever it resumes.
+  useEffect(() => {
+    if (phase !== 'closing') return
+    if (conversation.isSpeaking) {
+      heardCloseRef.current = true
+      return
+    }
+    if (!heardCloseRef.current) return
+    const t = setTimeout(() => void finalizeEnd(), CLOSE_SILENCE_MS)
+    return () => clearTimeout(t)
+  }, [phase, conversation.isSpeaking, finalizeEnd])
+
+  // Hard backstop: never leave the user stuck in 'closing' if the close never plays.
+  // Only fires when the agent never began speaking; if a close IS underway, the
+  // silence detector above ends it naturally so a longer goodbye is not cut off.
+  useEffect(() => {
+    if (phase !== 'closing') return
+    const t = setTimeout(() => {
+      if (!heardCloseRef.current) void finalizeEnd()
+    }, CLOSE_HARD_TIMEOUT_MS)
+    return () => clearTimeout(t)
+  }, [phase, finalizeEnd])
+
   return (
     <div>
       {phase === 'intro' ? (
-        <div style={{ display: 'grid', gap: 12, maxWidth: 440 }}>
+        <div style={{ display: 'grid', gap: 12, maxWidth: 460 }}>
           <p>
-            When you are ready, start the conversation. Talk as long as feels natural. When you are
-            done, press Finish and Memo will start building your memory.
+            When you are ready, start the conversation and talk for as long as you like. There is no
+            time limit and no wrong answers. When you feel done, press <em>Ready to end the
+            interview?</em> and Memo will say goodbye, then build your memory.
           </p>
           <button type="button" onClick={start}>
             Start the conversation
@@ -181,16 +239,32 @@ function Inner() {
       {phase === 'live' ? (
         <div>
           <p>Live. {conversation.isSpeaking ? 'Memo is speaking...' : 'Listening...'}</p>
-          <button type="button" onClick={finish}>
-            Finish and build my memory
+          <p style={{ color: '#888', fontSize: 13 }}>Talk as long as you like. Memo will not end it for you.</p>
+          <button type="button" onClick={beginClose}>
+            Ready to end the interview?
           </button>
+        </div>
+      ) : null}
+
+      {phase === 'closing' ? (
+        <div style={{ display: 'grid', gap: 8, maxWidth: 460 }}>
+          <p>Memo is wrapping up{conversation.isSpeaking ? ' and saying goodbye...' : '...'}</p>
+          <p style={{ color: '#888', fontSize: 13 }}>
+            It will finish its goodbye and then start building your memory. You can end now if you
+            prefer.
+          </p>
+          <div>
+            <button type="button" onClick={() => void finalizeEnd()}>
+              End now
+            </button>
+          </div>
         </div>
       ) : null}
 
       {phase === 'saving' ? <p>Saving your conversation...</p> : null}
 
       {phase === 'error' ? (
-        <div style={{ display: 'grid', gap: 8, maxWidth: 440 }}>
+        <div style={{ display: 'grid', gap: 8, maxWidth: 460 }}>
           <p style={{ color: 'crimson' }}>{error}</p>
           <button type="button" onClick={() => setPhase('intro')}>
             Try again
