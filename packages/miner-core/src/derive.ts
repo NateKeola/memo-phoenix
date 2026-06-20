@@ -37,6 +37,8 @@ import {
 } from './prompts.generated'
 import { addUsage, emptyUsage, type DiscrepancyItem, type PassResult, type TemporalClass } from './types'
 import { loadClaimDates, reconcileFreshness, supersedeFromDiscrepancies } from './freshness'
+import { STABLE_IDENTITY, buildResolver, persistAliases } from './resolve-store'
+import type { Resolver } from './resolution'
 
 const A_NODE_TABLES = ['canonical_people', 'canonical_places_orgs']
 const ALL_NODE_TABLES = [
@@ -84,7 +86,15 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
   const ctxKey = cfg.context.map((n) => ({ id: n.id, label: n.label, aliases: n.aliases }))
   // The corrections fingerprint is part of the input: a new rename/merge busts the
   // people pass memo so the rewrite is actually re-applied.
-  const hash = inputHash([cfg.canonicalTable, claims, ctxKey, cfg.peopleRewrite?.fingerprint ?? ''])
+  // The identity mode is part of the input: flipping MINER_STABLE_IDENTITY busts
+  // the memo so the next mine re-resolves through the resolver and seeds aliases.
+  const hash = inputHash([
+    cfg.canonicalTable,
+    claims,
+    ctxKey,
+    cfg.peopleRewrite?.fingerprint ?? '',
+    STABLE_IDENTITY ? 'resolve' : 'hash',
+  ])
   const scope = `derive:${cfg.canonicalTable}`
   if ((await getState(userId, scope)) === hash) return emptyPass(cfg.canonicalTable, true)
   if (claims.length === 0) {
@@ -116,6 +126,17 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
     },
   })
 
+  // Stable-identity resolver (gated). Reads current canonical rows + persisted
+  // aliases for this table so an incoming entity resolves to its existing stable id
+  // instead of a fresh label hash. Commitments disambiguate on the linked person.
+  const resolver: Resolver | null = STABLE_IDENTITY
+    ? await buildResolver(
+        userId,
+        cfg.canonicalTable,
+        cfg.canonicalTable === 'canonical_commitments' ? { contextOf: (d) => asString(d.person_id) } : {}
+      )
+    : null
+
   const byId = new Map<string, {
     id: string
     user_id: string
@@ -139,14 +160,20 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
     const nodeAliases = uniqueStrings(node.aliases)
     // keep the original surface form as an alias so the correction is self-stable
     if (normalizeLabel(rawName) !== normalizeLabel(name)) nodeAliases.push(rawName)
-    // People are identified by first + last name (last may be empty). The id is
-    // built from first+last, which reconstructs the label for a token-split, so
-    // existing person ids are preserved while the basis becomes first+last.
     const isPeople = cfg.canonicalTable === 'canonical_people'
     const split = isPeople ? splitName(name) : null
-    const id = split ? canonicalPersonId(userId, split.first, split.last) : canonicalId(userId, cfg.canonicalTable, name)
     const rawData = (node.data && typeof node.data === 'object' ? (node.data as Record<string, unknown>) : {})
     const nodeData = split ? { ...rawData, first_name: split.first, last_name: split.last } : rawData
+    // STABLE IDENTITY: resolve to an existing stable id (exact -> alias -> fuzzy),
+    // minting a random id only on no match, so a label drift updates the alias map
+    // not the id. OFF: the prior label-derived id (people on first+last, which
+    // reconstructs the label so existing ids are preserved).
+    const contextKey = cfg.canonicalTable === 'canonical_commitments' ? asString(rawData.person_id) : null
+    const id = resolver
+      ? resolver.resolve(name, nodeAliases, contextKey).id
+      : split
+        ? canonicalPersonId(userId, split.first, split.last)
+        : canonicalId(userId, cfg.canonicalTable, name)
     const existing = byId.get(id)
     if (existing) {
       // two surface forms normalized to the same id (a merge, or just casing): union
@@ -172,6 +199,7 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
 
   const rows = Array.from(byId.values())
   const w = await writeCanonical(userId, cfg.canonicalTable, rows)
+  if (resolver) await persistAliases(userId, cfg.canonicalTable, resolver.newAliases())
   await setState(userId, scope, hash)
   return {
     table: cfg.canonicalTable,
@@ -298,7 +326,7 @@ async function runInsightsPass(userId: string, nodes: CanonNode[]): Promise<Pass
     nodes: nodes.map((n) => ({ id: n.id, label: n.label, summary: n.summary, source_claim_ids: n.source_claim_ids })),
     relationships: rels.map((r) => ({ id: r.id, label: r.label, summary: r.summary })),
   }
-  const hash = inputHash([table, layer])
+  const hash = inputHash([table, layer, STABLE_IDENTITY ? 'resolve' : 'hash'])
   const scope = `derive:${table}`
   if ((await getState(userId, scope)) === hash) return emptyPass(table, true)
   if (nodes.length === 0) {
@@ -326,6 +354,12 @@ async function runInsightsPass(userId: string, nodes: CanonNode[]): Promise<Pass
     },
   })
 
+  // Insights are identified by their statement (not the pattern_type label), and
+  // statement rewording is the worst churn source, so fuzzy resolution helps most.
+  const resolver: Resolver | null = STABLE_IDENTITY
+    ? await buildResolver(userId, table, { labelOf: (d) => asString(d.statement) })
+    : null
+
   const byId = new Map<string, {
     id: string
     user_id: string
@@ -342,7 +376,7 @@ async function runInsightsPass(userId: string, nodes: CanonNode[]): Promise<Pass
     if (!statement) continue
     const cited = uniqueStrings(ins.supporting_claim_ids)
     if (cited.length === 0) continue
-    const id = canonicalId(userId, table, statement)
+    const id = resolver ? resolver.resolve(statement).id : canonicalId(userId, table, statement)
     if (byId.has(id)) continue
     byId.set(id, {
       id,
@@ -363,6 +397,7 @@ async function runInsightsPass(userId: string, nodes: CanonNode[]): Promise<Pass
 
   const rows = Array.from(byId.values())
   const w = await writeCanonical(userId, table, rows)
+  if (resolver) await persistAliases(userId, table, resolver.newAliases())
   await setState(userId, scope, hash)
   return {
     table,
