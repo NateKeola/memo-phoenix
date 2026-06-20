@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { CaptureMenu } from '@/components/capture-menu'
+import { AutoMineOnLoad } from '@/components/auto-mine-on-load'
 import { isOperator } from '@/lib/auth/operator'
 
 export default async function HomePage() {
@@ -30,6 +31,8 @@ export default async function HomePage() {
     <main style={{ padding: 24, fontFamily: 'system-ui, sans-serif' }}>
       <h1>Memo Phoenix</h1>
       <p>Signed in as {user.email}</p>
+      {/* Fires an auto mine when enough new context has accumulated (no-op otherwise). */}
+      <AutoMineOnLoad />
       {activeRun ? (
         <p style={{ margin: '12px 0', background: '#fdf6e3', padding: 12, borderRadius: 8 }}>
           Building your memory from your conversation. <Link href="/building">See progress &rarr;</Link>
@@ -44,6 +47,9 @@ export default async function HomePage() {
       </p>
       <p style={{ margin: '16px 0' }}>
         <Link href="/companion">Today &rarr;</Link>
+      </p>
+      <p style={{ margin: '16px 0' }}>
+        <Link href="/miner">Memory &rarr;</Link>
       </p>
       {isOperator(user) ? (
         <p style={{ margin: '16px 0' }}>
