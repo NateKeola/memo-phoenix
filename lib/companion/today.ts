@@ -9,6 +9,7 @@ import { attachProvenance, type RetrievalDeps } from '@/lib/chat/retrieval'
 import { firstLast, personDisplay } from '@/lib/names'
 import { matchOverlay, readOverlay, type CommitmentRef } from './overlay'
 import { phraseCommitment, relationshipNudges, type RelationshipNudge } from './nudges'
+import { resolveTiming } from './timing'
 
 export type { RetrievalDeps } from '@/lib/chat/retrieval'
 
@@ -26,6 +27,12 @@ export type FollowUp = {
   // light, user-owned tracking from the overlay (never an external action)
   dueDate: string | null
   linkedPerson: { id: string; name: string } | null
+  // time-sensitivity (inferred by the miner, overridable by the user)
+  timeSensitive: boolean
+  deadline: string | null
+  passed: boolean
+  // the user's explicit override (null = using the inferred value), so the control reflects it
+  timeSensitiveOverride: boolean | null
   provenance: string | null
   sourceClaimIds: string[]
 }
@@ -37,11 +44,16 @@ export type Today = {
   soon: FollowUp[]
   open: FollowUp[]
   snoozed: FollowUp[]
+  // time-sensitive items whose deadline has passed: kept out of the main tab (hygiene)
+  // but never deleted; surfaced in a separate read-time view.
+  past: FollowUp[]
+  // every non-dismissed follow-up (open + done + snoozed + past), for the query/filter.
+  all: FollowUp[]
   relationshipNudges: RelationshipNudge[]
   upcomingEvents: UpcomingEvent[]
   // people (id + display name) for the "link a person" picker
   people: Array<{ id: string; name: string }>
-  counts: { active: number; snoozed: number; nudges: number; events: number }
+  counts: { active: number; snoozed: number; past: number; nudges: number; events: number }
 }
 
 type CommitmentRow = {
@@ -124,51 +136,54 @@ export async function getToday(deps: RetrievalDeps, nowMs: number): Promise<Toda
 
   const { byId: people, list: peopleList } = await loadPeople(supabase, userId)
 
-  type Active = CommitmentRow & { _state: ReturnType<typeof stateByCommitment.get>; _snoozedFuture: boolean }
-  const active: Active[] = []
-  const snoozedFuture: Active[] = []
+  // Build a follow-up for EVERY non-dismissed commitment (open + done + snoozed +
+  // past), each with its effective status and resolved time-sensitivity. The
+  // categories below are derived from these; `all` is the full set the query
+  // filters. Dismissed items are hidden entirely.
+  type Built = FollowUp & { id: string; source_claim_ids: string[]; futureSnoozed: boolean }
+  const built: Built[] = []
   for (const c of commitments) {
     const st = stateByCommitment.get(c.id)
-    const minedStatus = (str((c.data ?? {}).status) ?? 'open').toLowerCase()
-    const effective = (st?.state ?? minedStatus).toLowerCase()
-    if (effective === 'done' || effective === 'dismissed') continue
-    const snoozedFutureFlag = effective === 'snoozed' && Boolean(st?.snooze_until) && Date.parse(st!.snooze_until!) > nowMs
-    const row: Active = { ...c, _state: st, _snoozedFuture: snoozedFutureFlag }
-    if (snoozedFutureFlag) snoozedFuture.push(row)
-    else active.push(row)
+    const data = c.data ?? {}
+    const minedStatus = (str(data.status) ?? 'open').toLowerCase()
+    const status = (st?.state ?? minedStatus).toLowerCase()
+    if (status === 'dismissed') continue
+    const pid = str(data.person_id)
+    const p = pid ? people.get(pid) : undefined
+    const phrased = phraseCommitment(c.label, p?.name ?? null, str(data.due))
+    const linkedId = st?.linked_person_id ?? null
+    const linked = linkedId ? people.get(linkedId) : undefined
+    const timing = resolveTiming({
+      data,
+      overrideTimeSensitive: st?.time_sensitive ?? null,
+      overrideDeadline: st?.due_date ?? null,
+      now: nowMs,
+    })
+    built.push({
+      id: c.id,
+      commitmentId: c.id,
+      headline: phrased.headline,
+      suggestion: phrased.suggestion,
+      due: str(data.due),
+      status,
+      person: pid ? { id: pid, label: p?.name ?? null, workOrPersonal: p?.workOrPersonal ?? null } : null,
+      bucket: bucketOf(str(data.due), st?.snooze_until ?? null, nowMs),
+      snoozeUntil: st?.snooze_until ?? null,
+      dueDate: st?.due_date ?? null,
+      linkedPerson: linkedId ? { id: linkedId, name: linked?.name ?? 'someone' } : null,
+      timeSensitive: timing.timeSensitive,
+      deadline: timing.deadline,
+      passed: timing.passed,
+      timeSensitiveOverride: st?.time_sensitive ?? null,
+      provenance: null,
+      sourceClaimIds: c.source_claim_ids ?? [],
+      source_claim_ids: c.source_claim_ids ?? [],
+      futureSnoozed: status === 'snoozed' && Boolean(st?.snooze_until) && Date.parse(st!.snooze_until!) > nowMs,
+    })
   }
 
-  const toFollowUp = (rows: Active[]) =>
-    rows.map((c) => {
-      const data = c.data ?? {}
-      const pid = str(data.person_id)
-      const p = pid ? people.get(pid) : undefined
-      const phrased = phraseCommitment(c.label, p?.name ?? null, str(data.due))
-      const linkedId = c._state?.linked_person_id ?? null
-      const linked = linkedId ? people.get(linkedId) : undefined
-      return {
-        id: c.id,
-        commitmentId: c.id,
-        headline: phrased.headline,
-        suggestion: phrased.suggestion,
-        due: str(data.due),
-        status: (c._state?.state ?? str(data.status) ?? 'open').toLowerCase(),
-        person: pid ? { id: pid, label: p?.name ?? null, workOrPersonal: p?.workOrPersonal ?? null } : null,
-        bucket: bucketOf(str(data.due), c._state?.snooze_until ?? null, nowMs),
-        snoozeUntil: c._state?.snooze_until ?? null,
-        dueDate: c._state?.due_date ?? null,
-        linkedPerson: linkedId ? { id: linkedId, name: linked?.name ?? 'someone' } : null,
-        sourceClaimIds: c.source_claim_ids ?? [],
-        source_claim_ids: c.source_claim_ids ?? [],
-      }
-    })
-
-  const [activeWithProv, snoozedWithProv] = await Promise.all([
-    attachProvenance(deps, toFollowUp(active)),
-    attachProvenance(deps, toFollowUp(snoozedFuture)),
-  ])
-
-  const finalize = (x: (typeof activeWithProv)[number]): FollowUp => ({
+  const withProv = await attachProvenance(deps, built)
+  const finalize = (x: (typeof withProv)[number]): FollowUp => ({
     commitmentId: x.commitmentId,
     headline: x.headline,
     suggestion: x.suggestion,
@@ -179,12 +194,21 @@ export async function getToday(deps: RetrievalDeps, nowMs: number): Promise<Toda
     snoozeUntil: x.snoozeUntil,
     dueDate: x.dueDate,
     linkedPerson: x.linkedPerson,
+    timeSensitive: x.timeSensitive,
+    deadline: x.deadline,
+    passed: x.passed,
+    timeSensitiveOverride: x.timeSensitiveOverride,
     provenance: x.provenance,
     sourceClaimIds: x.sourceClaimIds,
   })
 
-  const items = activeWithProv.map(finalize)
-  const snoozed = snoozedWithProv.map(finalize)
+  const isDone = (i: (typeof withProv)[number]) => i.status === 'done'
+  // Main tab: active (not done, not snoozed-into-the-future) AND deadline not passed.
+  const mainActive = withProv.filter((i) => !isDone(i) && !i.futureSnoozed && !i.passed).map(finalize)
+  // Past: active but time-sensitive with a passed deadline. Kept, not deleted.
+  const past = withProv.filter((i) => !isDone(i) && !i.futureSnoozed && i.passed).map(finalize)
+  const snoozed = withProv.filter((i) => i.futureSnoozed).map(finalize)
+  const allFollowUps = withProv.map(finalize)
 
   const upcomingEvents: UpcomingEvent[] = ((eventData ?? []) as CommitmentRow[]).map((e) => ({
     id: e.id,
@@ -194,13 +218,21 @@ export async function getToday(deps: RetrievalDeps, nowMs: number): Promise<Toda
   }))
 
   return {
-    overdue: items.filter((i) => i.bucket === 'overdue'),
-    soon: items.filter((i) => i.bucket === 'soon'),
-    open: items.filter((i) => i.bucket === 'open'),
+    overdue: mainActive.filter((i) => i.bucket === 'overdue'),
+    soon: mainActive.filter((i) => i.bucket === 'soon'),
+    open: mainActive.filter((i) => i.bucket === 'open'),
     snoozed,
+    past,
+    all: allFollowUps,
     relationshipNudges: nudges,
     upcomingEvents,
     people: peopleList,
-    counts: { active: items.length, snoozed: snoozed.length, nudges: nudges.length, events: upcomingEvents.length },
+    counts: {
+      active: mainActive.length,
+      snoozed: snoozed.length,
+      past: past.length,
+      nudges: nudges.length,
+      events: upcomingEvents.length,
+    },
   }
 }

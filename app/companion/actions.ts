@@ -18,6 +18,7 @@ type CompanionStatePatch = {
   match_person_id?: string | null
   due_date?: string | null
   linked_person_id?: string | null
+  time_sensitive?: boolean | null
 }
 
 // Read-merge-upsert so two surfaces (state buttons, follow-up tracking) writing to
@@ -85,12 +86,15 @@ export async function setCommitmentState(input: {
   return { ok: true }
 }
 
-// Light, user-owned tracking on a follow-up: when they intend to do it and who
-// with. Stored in the overlay only. Never schedules or sends anything.
+// Light, user-owned tracking + time-sensitivity on a follow-up: a deadline
+// (due_date, which also drives the time-passed hygiene), a linked person, and an
+// explicit time-sensitive override (true / false / null=use the miner-inferred
+// value). Stored in the overlay only. Never schedules or sends anything.
 export async function setFollowupTracking(input: {
   commitmentId: string
   dueDate?: string | null
   linkedPersonId?: string | null
+  timeSensitive?: boolean | null
   matchLabel?: string | null
   matchPersonId?: string | null
 }): Promise<StateResult> {
@@ -106,10 +110,12 @@ export async function setFollowupTracking(input: {
   if (rawDate && Number.isNaN(Date.parse(rawDate))) return { ok: false, error: 'invalid date' }
   const dueDate = rawDate ? new Date(rawDate).toISOString() : null
   const linkedPersonId = input.linkedPersonId && input.linkedPersonId.trim() ? input.linkedPersonId : null
+  const timeSensitive = input.timeSensitive === undefined ? undefined : input.timeSensitive
 
   const err = await patchCompanionState(supabase, user.id, input.commitmentId, {
     due_date: dueDate,
     linked_person_id: linkedPersonId,
+    ...(timeSensitive === undefined ? {} : { time_sensitive: timeSensitive }),
     match_label: input.matchLabel ?? null,
     match_person_id: input.matchPersonId ?? null,
   })
@@ -119,7 +125,12 @@ export async function setFollowupTracking(input: {
     user_id: user.id,
     event_type: 'companion_tracking',
     name: 'followup',
-    attrs: { commitment_id: input.commitmentId, has_date: Boolean(dueDate), linked_person: Boolean(linkedPersonId) },
+    attrs: {
+      commitment_id: input.commitmentId,
+      has_date: Boolean(dueDate),
+      linked_person: Boolean(linkedPersonId),
+      time_sensitive: timeSensitive ?? null,
+    },
   })
   revalidatePath('/companion')
   return { ok: true }
