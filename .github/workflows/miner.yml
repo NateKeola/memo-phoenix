@@ -1,0 +1,75 @@
+name: Run miner (off-machine)
+
+# The off-machine miner runtime FALLBACK. The primary path is the Vercel Pro run
+# route (app/api/miner/run, maxDuration raised); this Action exists for when a
+# recompute would exceed even that ceiling, or as an operator escape hatch, so a
+# user never has to run anything on their own machine.
+#
+# Trigger it two ways, both per-user:
+#   - workflow_dispatch: run it by hand from the Actions tab, passing user_id.
+#   - repository_dispatch (event_type: miner-run): fired by the app
+#     (lib/miner/dispatch.ts) when MINER_USE_GITHUB_ACTION=1 and the app has a
+#     GITHUB_DISPATCH_TOKEN + GITHUB_REPO. client_payload.user_id selects the user.
+#
+# REQUIRED GitHub Actions secrets (Settings -> Secrets and variables -> Actions):
+#   NEXT_PUBLIC_SUPABASE_URL    the dev project URL
+#   SUPABASE_SERVICE_ROLE_KEY   service-role key (the miner is the canonical writer)
+#   ANTHROPIC_API_KEY           the model key for extraction/resolution
+# Optional: MINER_MODEL, MINER_EFFORT.
+#
+# The CLI runs `mineWithLock` (packages/miner-core), which takes the per-user
+# miner_runs lock, so this Action and the Vercel route cannot collide. The
+# concurrency group below is a second guard against two queued Action runs for the
+# same user.
+
+on:
+  workflow_dispatch:
+    inputs:
+      user_id:
+        description: 'The user_id (auth.users id) whose graph to mine'
+        required: true
+        type: string
+  repository_dispatch:
+    types: [miner-run]
+
+concurrency:
+  group: miner-${{ github.event.inputs.user_id || github.event.client_payload.user_id }}
+  cancel-in-progress: false
+
+jobs:
+  mine:
+    runs-on: ubuntu-latest
+    env:
+      MEMO_USER_ID: ${{ github.event.inputs.user_id || github.event.client_payload.user_id }}
+      MINER_RUNTIME: github
+      MINER_TRIGGER: ${{ github.event.client_payload.trigger || 'manual' }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      MINER_MODEL: ${{ secrets.MINER_MODEL }}
+      MINER_EFFORT: ${{ secrets.MINER_EFFORT }}
+    steps:
+      - name: Preflight - user_id and required secrets are set
+        run: |
+          missing=""
+          [ -n "$MEMO_USER_ID" ] || missing="$missing user_id(input/payload)"
+          [ -n "$NEXT_PUBLIC_SUPABASE_URL" ] || missing="$missing NEXT_PUBLIC_SUPABASE_URL"
+          [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] || missing="$missing SUPABASE_SERVICE_ROLE_KEY"
+          [ -n "$ANTHROPIC_API_KEY" ] || missing="$missing ANTHROPIC_API_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing:$missing"
+            exit 1
+          fi
+          echo "Mining user $MEMO_USER_ID"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run the miner
+        run: npm run miner

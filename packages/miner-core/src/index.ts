@@ -5,7 +5,7 @@
 // Recompute is id-preserving (deterministic UUIDv5) and memoized, so a second run
 // over unchanged input is a no-op. Provenance (source_claim_ids) is mandatory.
 
-export { mine, type MineSummary } from './run'
+export { mine, mineWithLock, type MineSummary, type MineRunResult } from './run'
 export { runDerivation } from './derive'
 export { extractCapture, type Capture, type ExtractResult } from './extract'
 export type { PassResult, CanonicalRow, TemporalClass, Usage, DiscrepancyItem } from './types'
