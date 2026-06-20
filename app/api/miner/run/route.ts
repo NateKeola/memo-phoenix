@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isOperator } from '@/lib/auth/operator'
 import { mineWithLock } from '@memo/miner-core'
 import { isGithubDispatchConfigured, triggerMinerWorkflow } from '@/lib/miner/dispatch'
+import { getMinerState } from '@/lib/miner/state'
 import { logEvent } from '@/lib/telemetry'
 
 export const runtime = 'nodejs'
@@ -26,6 +27,24 @@ export async function POST(request: NextRequest) {
   // A user mines their OWN graph. Only the operator may target another user_id.
   const targetUserId = body.userId && isOperator(user) ? body.userId : user.id
   const trigger = typeof body.trigger === 'string' ? body.trigger : 'manual'
+
+  // Auto-run is authoritative server-side: a trigger='auto' request only proceeds
+  // when the new-context measure actually crosses the threshold (and no run is
+  // active). This keeps the client from spamming auto-runs and ensures "auto" rows
+  // in the ledger genuinely reflect the threshold being crossed. Manual runs always
+  // proceed (the user explicitly asked). The concurrency guard below is the second
+  // line: even two simultaneous triggers cannot start two mines.
+  if (trigger === 'auto') {
+    const state = await getMinerState(supabase, targetUserId)
+    if (!state.shouldAutoRun) {
+      return NextResponse.json({
+        status: 'skipped',
+        reason: 'below_threshold',
+        newCaptures: state.newCaptures,
+        threshold: state.threshold,
+      })
+    }
+  }
 
   // Offload to the GitHub Action when explicitly configured (survives a closed tab
   // and any ceiling). The Action's CLI creates and owns the miner_runs row.
