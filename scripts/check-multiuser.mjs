@@ -100,7 +100,7 @@ async function deleteTestUser(email) {
 
 async function deleteTestRowsFor(userId) {
   // delete only mutable rows we created; never touch append-only ground truth
-  for (const table of ['companion_state', 'canonical_people', 'canonical_commitments', 'canonical_facts', 'invites', 'miner_runs']) {
+  for (const table of ['companion_state', 'canonical_people', 'canonical_commitments', 'canonical_facts', 'invites', 'miner_runs', 'entity_aliases']) {
     await svc('DELETE', `${table}?user_id=eq.${userId}`)
   }
 }
@@ -130,6 +130,8 @@ async function main() {
     // B2 tables: an invite the user owns, and a completed miner run for the user.
     { table: 'invites', row: { user_id: uid, email: `${MARK}-invite-${who}@securitytest.local`, status: 'pending' } },
     { table: 'miner_runs', row: { user_id: uid, status: 'done', trigger: 'cli', runtime: 'local', summary: { mark: `${MARK}-${who}` } } },
+    // id-hardening: an identity alias row for the user (service-role written).
+    { table: 'entity_aliases', row: { user_id: uid, entity_table: 'canonical_people', alias_norm: `${MARK}-alias-${who}`, stable_id: '00000000-0000-0000-0000-0000000000ee' } },
   ]
   for (const { table, row } of [...mk(A, 'A'), ...mk(B, 'B')]) {
     const r = await svc('POST', table, [row], 'return=representation')
@@ -184,9 +186,9 @@ async function main() {
   const updated = Array.isArray(up.data) ? up.data.length : 0
   check('A cannot UPDATE B\'s companion_state (0 rows affected)', updated === 0, `updated ${updated}`)
 
-  console.log('\n== B2 tables: invites + miner_runs are per-user ==')
+  console.log('\n== B2 + identity tables: invites + miner_runs + entity_aliases are per-user ==')
   for (const [label, jwt, self, other] of [['A', jwtA, 'A', 'B'], ['B', jwtB, 'B', 'A']]) {
-    for (const table of ['invites', 'miner_runs']) {
+    for (const table of ['invites', 'miner_runs', 'entity_aliases']) {
       const rows = await rowsFor(jwt, table)
       check(`${label} sees own ${table}`, hasMark(rows, self))
       check(`${label} CANNOT see ${other}'s ${table}`, !hasMark(rows, other), `leaked ${rows.length} rows`)
@@ -207,7 +209,7 @@ async function main() {
   check('A reconfirm view does NOT show B\'s', !hasMark(vA, 'B'), `leaked ${vA.length}`)
 
   console.log('\n== anonymous (no JWT) sees zero rows everywhere ==')
-  for (const table of ['captures', 'canonical_people', 'canonical_facts', 'companion_state', 'reconfirm_candidates', 'telemetry_events', 'invites', 'miner_runs']) {
+  for (const table of ['captures', 'canonical_people', 'canonical_facts', 'companion_state', 'reconfirm_candidates', 'telemetry_events', 'invites', 'miner_runs', 'entity_aliases']) {
     const r = await asAnon('GET', `${table}?select=*`)
     const n = Array.isArray(r.data) ? r.data.length : -1
     check(`anon sees 0 rows in ${table}`, n === 0, `status ${r.status} got ${n} (${JSON.stringify(r.data).slice(0,80)})`)
