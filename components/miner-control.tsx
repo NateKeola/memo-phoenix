@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { MinerState, LedgerRun } from '@/lib/miner/state'
 
 const TRIGGER_LABEL: Record<string, string> = {
@@ -32,7 +32,6 @@ export function MinerControl() {
   const [state, setState] = useState<MinerState | null>(null)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
-  const autoFiredRef = useRef(false)
 
   const fetchState = useCallback(async () => {
     try {
@@ -78,16 +77,6 @@ export function MinerControl() {
     void fetchState()
   }, [fetchState])
 
-  // auto-run once when the measure has crossed the threshold and nothing is running
-  useEffect(() => {
-    if (!state || autoFiredRef.current) return
-    if (state.shouldAutoRun && !state.active) {
-      autoFiredRef.current = true
-      setNote('Enough new notes have piled up since the last update, so Memo is updating your memory now.')
-      void run('auto')
-    }
-  }, [state, run])
-
   // poll while a run is active so live status and the ledger refresh
   useEffect(() => {
     if (!state?.active) return
@@ -129,11 +118,11 @@ export function MinerControl() {
         {note ? <p style={{ marginTop: 8, color: '#555', fontSize: 14 }}>{note}</p> : null}
       </section>
 
-      {/* progress toward the next auto-run */}
+      {/* progress toward the next daily auto-mine */}
       <section>
         <p style={{ margin: '0 0 6px', fontSize: 14 }}>
-          {state.newCaptures} new {state.newCaptures === 1 ? 'note' : 'notes'} since the last update. Memo updates
-          automatically at {state.threshold}.
+          {state.newCaptures} new {state.newCaptures === 1 ? 'note' : 'notes'} since the last update. Memo
+          updates once a day when there are at least {state.threshold}, or run it now.
         </p>
         <div style={{ background: '#eee', borderRadius: 6, height: 12, overflow: 'hidden' }}>
           <div

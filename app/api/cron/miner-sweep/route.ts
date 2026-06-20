@@ -6,12 +6,13 @@ import { logEvent } from '@/lib/telemetry'
 
 export const runtime = 'nodejs'
 
-// Headless background mining (Phase 2 follow-up Task C). A scheduled sweep (Vercel
-// Cron, see vercel.json) that mines for any user whose accumulated unmined-capture
-// count is at or over the auto-run threshold, even with no tab open. It does NOT
-// run a long mine inline in this short-lived function: it kicks off the GitHub
-// Action per over-threshold user (the Action has no tight timeout) via
-// repository_dispatch, recorded as an auto run.
+// The DAILY mining trigger (one of exactly two; the other is the manual "Run now"
+// button). A once-a-day Vercel Cron sweep (vercel.json, "0 8 * * *", within the
+// Hobby daily-cron limit) that mines ONLY users whose accumulated unmined-capture
+// count is at or over the auto-run threshold, skipping everyone with nothing new.
+// It does NOT run a long mine inline in this short-lived function: it kicks off the
+// GitHub Action per over-threshold user (the Action has no tight timeout) via
+// repository_dispatch, recorded as an auto run. There is no fire-on-app-use trigger.
 //
 // Safety: it only dispatches when shouldAutoRun is true (no active run + over
 // threshold), and the Action's CLI takes the miner_runs lock (mineWithLock), so a

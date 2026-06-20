@@ -14,9 +14,12 @@ export type OverlayRow = {
   snooze_until: string | null
   match_label: string | null
   match_person_id: string | null
-  // light, user-owned tracking on a follow-up (never an external action)
+  // light, user-owned tracking on a follow-up (never an external action). due_date
+  // doubles as the user's set deadline for time-sensitivity.
   due_date: string | null
   linked_person_id: string | null
+  // user override of time-sensitivity (null/absent = use the miner-inferred value)
+  time_sensitive?: boolean | null
 }
 
 export type CommitmentRef = { id: string; label: string | null; personId: string | null }
@@ -114,6 +117,7 @@ export async function readOverlay(supabase: SupabaseClient, userId: string): Pro
       match_person_id: (row.match_person_id as string | null) ?? null,
       due_date: (row.due_date as string | null) ?? null,
       linked_person_id: (row.linked_person_id as string | null) ?? null,
+      time_sensitive: typeof row.time_sensitive === 'boolean' ? row.time_sensitive : null,
     }
   })
 }
