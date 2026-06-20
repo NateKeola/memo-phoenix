@@ -5,7 +5,7 @@
 // Recompute is id-preserving (deterministic UUIDv5) and memoized, so a second run
 // over unchanged input is a no-op. Provenance (source_claim_ids) is mandatory.
 
-export { mine, mineWithLock, type MineSummary, type MineRunResult } from './run'
+export { mine, mineWithLock, assertUserId, type MineSummary, type MineRunResult } from './run'
 export { runDerivation } from './derive'
 // Stable-identity resolution (deterministic-id hardening). The pure helpers are
 // exported for the offline resolution check; the DB-backed Resolver wiring runs

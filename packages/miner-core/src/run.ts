@@ -17,7 +17,23 @@ export type MineSummary = {
 // raw layer, then derive the canonical layer (A -> B -> C) from the full raw set.
 // Extraction and each derivation pass are memoized on input hashes, so a second
 // run over unchanged input does no LLM work and writes nothing.
+// The miner runs with the service-role key, which BYPASSES RLS, so per-user
+// isolation is enforced entirely by every query filtering on this user_id. A
+// missing or malformed user_id must therefore be a HARD FAILURE, never a fall-back
+// to a global/unscoped run: an empty value would silently scope to nothing (or, if
+// a filter were ever dropped, to everyone). We refuse loudly instead. The id is an
+// auth.users uuid.
+const USER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export function assertUserId(userId: string, where: string): void {
+  if (typeof userId !== 'string' || !USER_ID_RE.test(userId.trim())) {
+    throw new Error(
+      `[miner] ${where}: a valid user_id is required (got ${JSON.stringify(userId)}); refusing to run unscoped`
+    )
+  }
+}
+
 export async function mine(userId: string, startedAtMs: number): Promise<MineSummary> {
+  assertUserId(userId, 'mine')
   const { data, error } = await admin()
     .from('captures')
     .select('id, user_id, mode, modality, body, target_kind, target_id')
@@ -87,6 +103,7 @@ export async function mineWithLock(
   userId: string,
   opts: { trigger: string; runtime: string }
 ): Promise<MineRunResult> {
+  assertUserId(userId, 'mineWithLock')
   const db = admin()
 
   // Reclaim a stale run before trying to acquire.
@@ -104,6 +121,7 @@ export async function mineWithLock(
     await db
       .from('miner_runs')
       .update({ status: 'error', error: 'stale run reclaimed', ended_at: new Date().toISOString() })
+      .eq('user_id', userId)
       .eq('id', active.id)
       .eq('status', 'running')
   }
@@ -136,6 +154,7 @@ export async function mineWithLock(
     await db
       .from('miner_runs')
       .update({ status: 'done', summary, ended_at: new Date().toISOString() })
+      .eq('user_id', userId)
       .eq('id', runId)
     return { status: 'done', runId, summary }
   } catch (e) {
@@ -143,6 +162,7 @@ export async function mineWithLock(
     await db
       .from('miner_runs')
       .update({ status: 'error', error: msg.slice(0, 1000), ended_at: new Date().toISOString() })
+      .eq('user_id', userId)
       .eq('id', runId)
     return { status: 'error', runId, error: msg }
   }
