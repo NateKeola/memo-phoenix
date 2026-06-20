@@ -44,6 +44,22 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
+  // Invite-only onboarding gate. A freshly invited user (app_metadata.invited, set
+  // by the admin invite path) who has not finished onboarding is sent to the
+  // onboarding interview before the rest of the app. The flag rides in the JWT, so
+  // this costs no DB query. The pre-existing operator has no `invited` flag and is
+  // never affected. Exempt /onboarding (itself) and /building (the post-onboarding
+  // wait) so we never loop while app_metadata.onboarded propagates.
+  if (user && !isPublic && path !== '/onboarding' && path !== '/building') {
+    const meta = (user.app_metadata ?? {}) as { invited?: boolean; onboarded?: boolean }
+    if (meta.invited === true && meta.onboarded !== true) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/onboarding'
+      url.search = ''
+      return NextResponse.redirect(url)
+    }
+  }
+
   // Must return supabaseResponse unchanged so refreshed cookies reach the browser.
   return supabaseResponse
 }
