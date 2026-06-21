@@ -51,9 +51,18 @@ Set these three under **Settings -> Secrets and variables -> Actions -> New repo
 
 Set the Vercel project environment variables (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`) in the Vercel dashboard.
 
-## Single-user lock
+## Invite-only beta: operator setup (so invites never silently break)
 
-This is not a public app. The real control is on the remote Supabase project: disable signups (dashboard or Management API) after the single user account is created. The app ships only a `/login` page (no signup UI), and FORCE RLS means any other account would see zero rows. Create the account first, then disable signups.
+Access is invite-only; public signups stay disabled. The operator invites people from `/admin`. For the invite and sign-in links to resolve to the deployed app (not a dead `localhost` link), set the deployed site URL in BOTH places:
+
+1. **`NEXT_PUBLIC_SITE_URL`** in the deployed Vercel environment (Settings -> Environment Variables), set to the deployed domain (e.g. `https://memo.example.com`), with no trailing path. The app builds the `/auth/callback` redirect in invite and create-account links from this. If it is unset in a deployed context the app REFUSES to mint an invite (a loud error in `/admin`) rather than emitting a localhost link. Set it in your local `.env.local` too if you ever generate invites from local dev.
+2. **Supabase Auth -> URL Configuration** (Authentication -> URL Configuration): the **Site URL** and the **Redirect URLs** allowlist must include the same deployed domain plus `.../auth/callback`. Supabase only accepts a `redirect_to` that is in this allowlist.
+
+Entry flow: `/login` offers **Sign in** (returning user, email + password) and **Create account** (an invited person enters their invited email and gets a magic sign-in link; a non-invited email is rejected). The link lands on `/auth/callback` and sends a first-time user into the onboarding interview. OAuth / SSO is deferred.
+
+## Public signups stay disabled
+
+This is not a public app. The control is on the remote Supabase project: signups are disabled (dashboard or Management API). The only public route is `/login` (Sign in plus an invite-only Create account, never open self-signup), and FORCE RLS means any other account would see zero rows. Add beta users via the `/admin` invite path; do not re-enable signups.
 
 ## Interview agent (PR3)
 

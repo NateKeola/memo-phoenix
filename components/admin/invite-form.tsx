@@ -20,6 +20,7 @@ export function InviteForm() {
       </form>
 
       {state?.error ? <p style={{ color: 'crimson' }}>{state.error}</p> : null}
+      {state?.warning ? <p style={{ color: '#b8860b' }}>{state.warning}</p> : null}
 
       {state?.ok && state.actionLink ? (
         <div style={{ marginTop: 12, background: '#f5f5f5', padding: 12, borderRadius: 8 }}>

@@ -36,6 +36,13 @@ export function OnboardingInterview() {
 const CLOSE_SILENCE_MS = 3500
 const CLOSE_HARD_TIMEOUT_MS = 18000
 
+// Onboarding length pacing. The bible aims the agent at about ten minutes; the flow
+// backs that with a SOFT wrap-up nudge (cue the warm close if still live) and a HARD
+// backstop that ends the session to bound runaway length and voice cost. The user
+// can always end early via "Ready to end the interview?".
+const SOFT_WRAP_MS = 10 * 60 * 1000
+const HARD_END_MS = 15 * 60 * 1000
+
 function Inner() {
   const router = useRouter()
   const [phase, setPhase] = useState<Phase>('intro')
@@ -49,10 +56,18 @@ function Inner() {
   // closing-flow refs
   const endingRef = useRef(false)
   const heardCloseRef = useRef(false)
+  // length-pacing refs (the soft wrap + hard backstop, set once when live)
+  const phaseRef = useRef<Phase>('intro')
+  const sessionSoftRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const sessionHardRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const sessionTimersStartedRef = useRef(false)
+  phaseRef.current = phase
 
   useEffect(
     () => () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current)
+      if (sessionSoftRef.current) clearTimeout(sessionSoftRef.current)
+      if (sessionHardRef.current) clearTimeout(sessionHardRef.current)
     },
     []
   )
@@ -147,6 +162,8 @@ function Inner() {
   const finalizeEnd = useCallback(async () => {
     if (endingRef.current) return
     endingRef.current = true
+    if (sessionSoftRef.current) clearTimeout(sessionSoftRef.current)
+    if (sessionHardRef.current) clearTimeout(sessionHardRef.current)
     setPhase('saving')
     try {
       await conversation.endSession()
@@ -195,6 +212,19 @@ function Inner() {
     }
   }, [conversation])
 
+  // Length pacing: when the interview goes live, set a SOFT wrap-up nudge (~10 min,
+  // cue the warm close if still live) and a HARD backstop (~15 min, end regardless).
+  // Set ONCE; they persist across the live -> closing transition. The user can still
+  // end early via "Ready to end the interview?".
+  useEffect(() => {
+    if (phase !== 'live' || sessionTimersStartedRef.current) return
+    sessionTimersStartedRef.current = true
+    sessionSoftRef.current = setTimeout(() => {
+      if (phaseRef.current === 'live') beginClose()
+    }, SOFT_WRAP_MS)
+    sessionHardRef.current = setTimeout(() => void finalizeEnd(), HARD_END_MS)
+  }, [phase, beginClose, finalizeEnd])
+
   // Auto-end once the agent's closing has played: wait for it to speak, then for a
   // short silence, then finalize. Resets the silence timer whenever it resumes.
   useEffect(() => {
@@ -224,9 +254,10 @@ function Inner() {
       {phase === 'intro' ? (
         <div style={{ display: 'grid', gap: 12, maxWidth: 460 }}>
           <p>
-            When you are ready, start the conversation and talk for as long as you like. There is no
-            time limit and no wrong answers. When you feel done, press <em>Ready to end the
-            interview?</em> and Memo will say goodbye, then build your memory.
+            When you are ready, start the conversation. Aim for about ten minutes (enough for Memo to
+            get a good first picture); there are no wrong answers. Memo will gently steer toward a
+            warm goodbye around then, or you can press <em>Ready to end the interview?</em> whenever
+            you feel done, and it will build your memory.
           </p>
           <button type="button" onClick={start}>
             Start the conversation
@@ -239,7 +270,7 @@ function Inner() {
       {phase === 'live' ? (
         <div>
           <p>Live. {conversation.isSpeaking ? 'Memo is speaking...' : 'Listening...'}</p>
-          <p style={{ color: '#888', fontSize: 13 }}>Talk as long as you like. Memo will not end it for you.</p>
+          <p style={{ color: '#888', fontSize: 13 }}>Memo will gently wrap up around ten minutes, or end whenever you are ready.</p>
           <button type="button" onClick={beginClose}>
             Ready to end the interview?
           </button>

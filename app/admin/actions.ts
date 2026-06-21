@@ -4,7 +4,7 @@ import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
-import { isOperator, siteUrl } from '@/lib/auth/operator'
+import { isOperator, resolveSiteUrl } from '@/lib/auth/operator'
 import { inviteByEmail, deleteUser } from '@/lib/supabase/auth-admin'
 import { normalizeEmail, isValidEmail, type Invite } from '@/lib/invites'
 import { logEvent } from '@/lib/telemetry'
@@ -29,7 +29,7 @@ async function requestOrigin(): Promise<string | undefined> {
   return `${proto}://${host}`
 }
 
-export type InviteState = { ok?: boolean; email?: string; actionLink?: string; error?: string }
+export type InviteState = { ok?: boolean; email?: string; actionLink?: string; error?: string; warning?: string }
 
 // Mints an invited account and returns its action link to the operator's screen
 // (via useActionState), so it works without SMTP. Public signups stay disabled;
@@ -52,7 +52,11 @@ export async function inviteAction(_prev: InviteState, formData: FormData): Prom
     return { error: `${email} already has an account.` }
   }
 
-  const redirectTo = `${siteUrl(await requestOrigin())}/auth/callback?next=/onboarding`
+  // The invite link must resolve to the deployed site URL, never a silent localhost
+  // fallback in a deployed environment. A misconfiguration is loud (refused here).
+  const site = resolveSiteUrl(await requestOrigin())
+  if ('error' in site) return { error: site.error }
+  const redirectTo = `${site.url}/auth/callback?next=/onboarding`
   let actionLink: string
   let invitedUserId: string
   try {
@@ -82,7 +86,7 @@ export async function inviteAction(_prev: InviteState, formData: FormData): Prom
     attrs: { invitee_user_id: invitedUserId, reinvite: Boolean(existing) },
   })
   revalidatePath('/admin')
-  return { ok: true, email, actionLink }
+  return { ok: true, email, actionLink, warning: site.warning }
 }
 
 // Withdraws an invite. If the invitee has not finished onboarding (status !=
