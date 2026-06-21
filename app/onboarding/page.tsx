@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { OnboardingInterview } from '@/components/onboarding-interview'
+import { OnboardingInterviewLoader } from '@/components/onboarding-interview-loader'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,7 +30,7 @@ export default async function OnboardingPage() {
         working on, what you care about. There are no wrong answers, and you can always add more later.
       </p>
       <p style={{ color: '#666' }}>This is a voice conversation, so it needs your microphone.</p>
-      <OnboardingInterview />
+      <OnboardingInterviewLoader />
     </main>
   )
 }
