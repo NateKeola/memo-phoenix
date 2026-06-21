@@ -17,12 +17,37 @@ export function isOperator(user: Pick<User, 'id' | 'email'> | null | undefined):
   return false
 }
 
-// Base URL for links we mint (invite redirect targets, etc.). Prefer an explicit
-// configured site URL; fall back to the request's own origin so local dev works
-// without extra config.
-export function siteUrl(requestOrigin?: string): string {
+export type SiteUrlResult = { url: string; warning?: string } | { error: string }
+
+function isLocalOrigin(u?: string): boolean {
+  return !u || /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/i.test(u)
+}
+
+// Resolve the base URL for links we mint (the invite redirect, the sign-in magic
+// link). The invite redirect MUST be a real, reachable URL, or the invited person
+// gets a dead localhost link. Resolution, in order:
+//   1. NEXT_PUBLIC_SITE_URL (the configured deployed domain) - always preferred.
+//   2. A real, non-localhost request origin (the deployed host on a real request).
+//   3. In a DEPLOYED context (Vercel / production) with neither, REFUSE LOUDLY -
+//      never silently emit a localhost link that looks fine and fails on click.
+//   4. Only in genuine local development, fall back to localhost (with a warning).
+export function resolveSiteUrl(requestOrigin?: string): SiteUrlResult {
   const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/$/, '')
-  if (configured) return configured
-  if (requestOrigin) return requestOrigin.replace(/\/$/, '')
-  return 'http://localhost:3000'
+  if (configured) return { url: configured }
+
+  const origin = requestOrigin?.trim().replace(/\/$/, '')
+  if (origin && !isLocalOrigin(origin)) return { url: origin }
+
+  const deployed = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production'
+  if (deployed) {
+    return {
+      error:
+        'Site URL not configured: NEXT_PUBLIC_SITE_URL is unset and the request origin is local. ' +
+        'Set NEXT_PUBLIC_SITE_URL to the deployed domain (and add it to the Supabase Auth Redirect URLs) before inviting.',
+    }
+  }
+  return {
+    url: origin || 'http://localhost:3000',
+    warning: 'Using a localhost link (local development). Set NEXT_PUBLIC_SITE_URL to send invites that work for others.',
+  }
 }
