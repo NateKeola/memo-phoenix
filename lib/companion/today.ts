@@ -116,25 +116,28 @@ async function loadPeople(
 
 export async function getToday(deps: RetrievalDeps, nowMs: number): Promise<Today> {
   const { supabase, userId } = deps
-  const [{ data: commitmentData, error: cErr }, { data: eventData }, overlay, nudges] = await Promise.all([
-    supabase.from('canonical_commitments').select('id, label, data, source_claim_ids').eq('user_id', userId).is('valid_to', null),
-    supabase
-      .from('canonical_events')
-      .select('id, label, data, source_claim_ids')
-      .eq('user_id', userId)
-      .is('valid_to', null)
-      .order('created_at', { ascending: false })
-      .limit(25),
-    readOverlay(supabase, userId),
-    relationshipNudges(deps, nowMs),
-  ])
+  // One parallel batch (no waterfall): commitments, events, overlay, nudges, people.
+  const [{ data: commitmentData, error: cErr }, { data: eventData }, overlay, nudges, peopleData] =
+    await Promise.all([
+      supabase.from('canonical_commitments').select('id, label, data, source_claim_ids').eq('user_id', userId).is('valid_to', null),
+      supabase
+        .from('canonical_events')
+        .select('id, label, data, source_claim_ids')
+        .eq('user_id', userId)
+        .is('valid_to', null)
+        .order('created_at', { ascending: false })
+        .limit(25),
+      readOverlay(supabase, userId),
+      relationshipNudges(deps, nowMs),
+      loadPeople(supabase, userId),
+    ])
   if (cErr) throw new Error(`[companion] read commitments: ${cErr.message}`)
 
   const commitments = (commitmentData ?? []) as CommitmentRow[]
   const refs: CommitmentRef[] = commitments.map((c) => ({ id: c.id, label: c.label, personId: str((c.data ?? {}).person_id) }))
   const stateByCommitment = matchOverlay(refs, overlay)
 
-  const { byId: people, list: peopleList } = await loadPeople(supabase, userId)
+  const { byId: people, list: peopleList } = peopleData
 
   // Build a follow-up for EVERY non-dismissed commitment (open + done + snoozed +
   // past), each with its effective status and resolved time-sensitivity. The

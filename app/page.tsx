@@ -16,15 +16,14 @@ export default async function HomePage() {
     redirect('/login')
   }
 
-  // Show a "building your memory" banner if a mine is in flight (e.g. just after
-  // onboarding), so the app is never a silent empty shell.
-  const { data: activeRun } = await supabase
-    .from('miner_runs')
-    .select('id, status')
-    .eq('user_id', user.id)
-    .eq('status', 'running')
-    .limit(1)
-    .maybeSingle()
+  // In one parallel batch: is a mine in flight (the "building" banner), and does the
+  // user have any captures yet (so a brand-new user gets a get-started hint rather
+  // than a bare nav). The app is never a silent, unexplained empty shell.
+  const [{ data: activeRun }, { count: captureCount }] = await Promise.all([
+    supabase.from('miner_runs').select('id, status').eq('user_id', user.id).eq('status', 'running').limit(1).maybeSingle(),
+    supabase.from('captures').select('id', { count: 'exact', head: true }).eq('user_id', user.id),
+  ])
+  const isNew = (captureCount ?? 0) === 0 && !activeRun
 
   return (
     <main style={{ padding: 24, fontFamily: 'system-ui, sans-serif' }}>
@@ -33,6 +32,11 @@ export default async function HomePage() {
       {activeRun ? (
         <p style={{ margin: '12px 0', background: '#fdf6e3', padding: 12, borderRadius: 8 }}>
           Building your memory from your conversation. <Link href="/building">See progress &rarr;</Link>
+        </p>
+      ) : null}
+      {isNew ? (
+        <p style={{ margin: '12px 0', color: '#555' }}>
+          Welcome. Add your first note or start an interview to begin building your memory.
         </p>
       ) : null}
       <CaptureMenu />

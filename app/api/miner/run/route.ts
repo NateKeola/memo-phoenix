@@ -7,10 +7,12 @@ import { getMinerState } from '@/lib/miner/state'
 import { logEvent } from '@/lib/telemetry'
 
 export const runtime = 'nodejs'
-// Vercel Pro + Fluid Compute ceiling. A full recompute is ~8 min today; this gives
-// headroom so onboarding completes without a serverless timeout. If a graph ever
-// outgrows it, set MINER_USE_GITHUB_ACTION=1 to offload to the Action instead.
-export const maxDuration = 800
+// 300s so the app deploys on any plan (800 exceeds the Hobby/Pro serverless ceiling
+// and failed the deploy). The ONLY thing that runs inline here is the onboarding
+// mine, which is small and fast for a brand-new user (their corpus is one
+// conversation), so 300 is ample. Larger and background mines offload to the GitHub
+// Action (no timeout) when MINER_USE_GITHUB_ACTION=1; the daily cron always uses it.
+export const maxDuration = 300
 
 // Triggers a miner run for a user. Primary path: run it INLINE here on Vercel Pro.
 // The concurrency lock (miner_runs partial unique index, via mineWithLock) makes a
