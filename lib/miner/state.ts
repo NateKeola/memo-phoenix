@@ -94,26 +94,27 @@ export async function getMinerState(
   userId: string,
   ledgerLimit = 20
 ): Promise<MinerState> {
-  // The ledger (newest first). The active run, if any, is always the newest row.
-  const { data: runs } = await supabase
-    .from('miner_runs')
-    .select('id, status, trigger, runtime, started_at, ended_at, summary, error')
-    .eq('user_id', userId)
-    .order('started_at', { ascending: false })
-    .limit(ledgerLimit)
+  // The ledger (newest first; the active run is always the newest row) and the
+  // watermark (the last SUCCESSFUL run's start, queried directly so a long tail of
+  // failed runs cannot hide it) are independent, so fetch them in parallel.
+  const [{ data: runs }, { data: lastDone }] = await Promise.all([
+    supabase
+      .from('miner_runs')
+      .select('id, status, trigger, runtime, started_at, ended_at, summary, error')
+      .eq('user_id', userId)
+      .order('started_at', { ascending: false })
+      .limit(ledgerLimit),
+    supabase
+      .from('miner_runs')
+      .select('started_at')
+      .eq('user_id', userId)
+      .eq('status', 'done')
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ])
   const rows = (runs ?? []) as Record<string, unknown>[]
   const activeRow = rows.find((r) => r.status === 'running') ?? null
-
-  // The watermark is the last SUCCESSFUL run's start. Query it directly rather than
-  // scanning the ledger window, so a long tail of failed runs cannot hide it.
-  const { data: lastDone } = await supabase
-    .from('miner_runs')
-    .select('started_at')
-    .eq('user_id', userId)
-    .eq('status', 'done')
-    .order('started_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
   const watermark = (lastDone?.started_at as string | undefined) ?? null
 
   // Count captures created since that watermark (RLS-scoped + explicit user filter).
