@@ -1,18 +1,12 @@
 'use client'
 
-import dynamic from 'next/dynamic'
+import { InterviewWidget } from '@/components/interview-widget'
 
-// Lazy-load the interview surface so the ElevenLabs voice SDK (~125 kB) is a
-// separate chunk, not in this route's initial First-Load JS. ssr:false because the
-// SDK is browser-only.
-const InterviewWidget = dynamic(
-  () => import('@/components/interview-widget').then((m) => m.InterviewWidget),
-  {
-    ssr: false,
-    loading: () => <p style={{ padding: 24, fontFamily: 'system-ui, sans-serif' }}>Loading...</p>,
-  }
-)
-
+// Direct (static) import of the interview surface. PR #20 deferred the ElevenLabs
+// SDK with next/dynamic(ssr:false) for a bundle win, but that ssr:false boundary
+// remounted the live conversation after the first turn and tore down the WebSocket
+// session (the agent stopped after one response). A working agent takes priority, so
+// the SDK loads with the route again. See the decision log.
 export default function StartInterviewPage() {
   return <InterviewWidget />
 }
