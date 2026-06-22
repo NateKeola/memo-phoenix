@@ -36,7 +36,13 @@ export async function updateSession(request: NextRequest) {
   const path = request.nextUrl.pathname
   // /api routes self-handle auth and return JSON status (401), so don't redirect
   // them to /login; the session is still refreshed above for the route handler.
-  const isPublic = path === '/login' || path.startsWith('/auth') || path.startsWith('/api')
+  // /not-authorized is reachable by a signed-in but not-allowlisted user (the route
+  // guard sends them there), so it must not be bounced by the gates below.
+  const isPublic =
+    path === '/login' ||
+    path === '/not-authorized' ||
+    path.startsWith('/auth') ||
+    path.startsWith('/api')
 
   if (!user && !isPublic) {
     const url = request.nextUrl.clone()
