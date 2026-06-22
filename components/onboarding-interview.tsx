@@ -3,6 +3,14 @@
 import { useRouter } from 'next/navigation'
 import { ConversationProvider, useConversation } from '@elevenlabs/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  DebugReadout,
+  describeDisconnect,
+  diagnosticCallbacks,
+  newVadState,
+  useInterviewDebug,
+  useLiveStatus,
+} from '@/components/interview-debug'
 
 type Phase = 'intro' | 'connecting' | 'live' | 'closing' | 'saving' | 'error'
 type Line = { role: string; text: string }
@@ -63,6 +71,20 @@ function Inner() {
   const sessionTimersStartedRef = useRef(false)
   phaseRef.current = phase
 
+  // --- temporary beta instrumentation (interview-end investigation) ---
+  const { lines: dbgLines, log } = useInterviewDebug('onboarding')
+  const vadRef = useRef(newVadState())
+  // Mount/unmount of the live conversation widget: if the agent stops because this
+  // component is being torn down, "widget UNMOUNTING" logs right before the disconnect.
+  useEffect(() => {
+    log('widget mounted')
+    return () => log('widget UNMOUNTING')
+  }, [log])
+  useEffect(() => {
+    log(`phase -> ${phase}`)
+  }, [phase, log])
+  // ---
+
   useEffect(
     () => () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current)
@@ -73,27 +95,40 @@ function Inner() {
   )
 
   const conversation = useConversation({
+    ...diagnosticCallbacks(log, vadRef),
     onConnect: (props: { conversationId?: string }) => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current)
       if (props?.conversationId) convIdRef.current = props.conversationId
+      log(`onConnect conversationId=${props?.conversationId ?? '?'}`)
       setPhase('live')
     },
-    onDisconnect: () => {
-      // The end controls drive the save flow.
+    onDisconnect: (details: unknown) => {
+      // The end controls drive the save flow. We only LOG why the session ended
+      // (reason=user is our own teardown; reason=agent/error is a server close).
+      log(`onDisconnect ${describeDisconnect(details)}`)
     },
     onMessage: (m: unknown) => {
       const obj = (m ?? {}) as { message?: string; source?: string; role?: string }
       const text = typeof m === 'string' ? m : obj.message
       if (!text) return
       const role = String(obj.role ?? obj.source ?? 'agent')
+      log(`message [${role}] ${String(text).slice(0, 60)}`)
       linesRef.current = [...linesRef.current, { role, text: String(text) }]
       setLines(linesRef.current)
     },
     onError: (e: unknown) => {
+      log(`onError ${e instanceof Error ? e.message : String(e)}`)
       setError(e instanceof Error ? e.message : String(e))
       setPhase('error')
     },
   })
+
+  const liveStatus = useLiveStatus(
+    conversation,
+    phase === 'connecting' || phase === 'live' || phase === 'closing',
+    log,
+    vadRef
+  )
 
   const start = useCallback(async () => {
     setError('')
@@ -111,15 +146,19 @@ function Inner() {
     }, 20000)
     try {
       try {
-        await navigator.mediaDevices.getUserMedia({ audio: true })
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        const t = stream.getAudioTracks()[0]
+        log(`mic permission granted: tracks=${stream.getAudioTracks().length} state=${t?.readyState} enabled=${t?.enabled} muted=${t?.muted}`)
       } catch (e) {
         const name = (e as DOMException)?.name
+        log(`getUserMedia failed: ${name ?? (e instanceof Error ? e.message : String(e))}`)
         throw new Error(
           name === 'NotAllowedError'
             ? 'Microphone access denied. Enable the mic in your browser settings and try again.'
             : `Microphone unavailable: ${e instanceof Error ? e.message : String(e)}`
         )
       }
+      log('POST /api/interview/start (onboarding)')
       const res = await fetch('/api/interview/start', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -135,6 +174,7 @@ function Inner() {
       if (!res.ok || !cfg.signedUrl) throw new Error(cfg.error || 'could not start onboarding')
       sessionIdRef.current = cfg.sessionId ?? null
       try {
+        log(`startSession() (promptLen=${(cfg.systemPrompt ?? '').length} firstMsgLen=${(cfg.firstMessage ?? '').length})`)
         await conversation.startSession({
           signedUrl: cfg.signedUrl,
           connectionType: 'websocket',
@@ -145,6 +185,7 @@ function Inner() {
             },
           },
         })
+        log('startSession() resolved')
       } catch (e) {
         throw new Error(
           `Could not start the conversation (${e instanceof Error ? e.message : String(e)}). If this mentions overrides, enable the agent's "System prompt" and "First message" override toggles in the ElevenLabs dashboard (Security).`
@@ -155,13 +196,14 @@ function Inner() {
       setError(e instanceof Error ? e.message : String(e))
       setPhase('error')
     }
-  }, [conversation])
+  }, [conversation, log])
 
   // Tear down + save + complete + hand off to the build screen. Guarded so the
   // auto-end timer and the explicit "End now" button cannot both fire it.
   const finalizeEnd = useCallback(async () => {
     if (endingRef.current) return
     endingRef.current = true
+    log('finalizeEnd() -> endSession() (tear down + save)')
     if (sessionSoftRef.current) clearTimeout(sessionSoftRef.current)
     if (sessionHardRef.current) clearTimeout(sessionHardRef.current)
     setPhase('saving')
@@ -196,13 +238,14 @@ function Inner() {
       setError(e instanceof Error ? e.message : String(e))
       setPhase('error')
     }
-  }, [conversation, router])
+  }, [conversation, router, log])
 
   // The user chooses to end. We do NOT tear down yet: we cue the agent to give its
   // closing recap (the bible already instructs a warm, named recap on close) and let
   // it SPEAK. The session ends once the close finishes (auto-detected below) or when
   // the user presses "End now".
   const beginClose = useCallback(() => {
+    log('beginClose() -> cue agent to wrap up (phase=closing)')
     heardCloseRef.current = false
     setPhase('closing')
     try {
@@ -210,7 +253,7 @@ function Inner() {
     } catch {
       // if the cue cannot be sent, the user can still press "End now"
     }
-  }, [conversation])
+  }, [conversation, log])
 
   // Length pacing: when the interview goes live, set a SOFT wrap-up nudge (~10 min,
   // cue the warm close if still live) and a HARD backstop (~15 min, end regardless).
@@ -219,11 +262,16 @@ function Inner() {
   useEffect(() => {
     if (phase !== 'live' || sessionTimersStartedRef.current) return
     sessionTimersStartedRef.current = true
+    log(`pacing timers armed: soft ${SOFT_WRAP_MS / 1000}s, hard ${HARD_END_MS / 1000}s`)
     sessionSoftRef.current = setTimeout(() => {
+      log('SOFT pacing timer fired (10 min)')
       if (phaseRef.current === 'live') beginClose()
     }, SOFT_WRAP_MS)
-    sessionHardRef.current = setTimeout(() => void finalizeEnd(), HARD_END_MS)
-  }, [phase, beginClose, finalizeEnd])
+    sessionHardRef.current = setTimeout(() => {
+      log('HARD pacing timer fired (15 min)')
+      void finalizeEnd()
+    }, HARD_END_MS)
+  }, [phase, beginClose, finalizeEnd, log])
 
   // Auto-end once the agent's closing has played: wait for it to speak, then for a
   // short silence, then finalize. Resets the silence timer whenever it resumes.
@@ -312,6 +360,8 @@ function Inner() {
           ))}
         </div>
       ) : null}
+
+      <DebugReadout title="/onboarding" status={liveStatus} lines={dbgLines} />
     </div>
   )
 }
