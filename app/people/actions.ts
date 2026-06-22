@@ -1,7 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { createClient } from '@/lib/supabase/server'
+import { authorizeAction } from '@/lib/auth/guard'
 import { logEvent } from '@/lib/telemetry'
 
 // Corrections write to the append-only `corrections` table ONLY. They never touch
@@ -20,11 +20,9 @@ export async function renamePerson(input: {
   fromLabel: string
   toLabel: string
 }): Promise<ActionResult> {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return { ok: false, error: 'unauthorized' }
+  const auth = await authorizeAction()
+  if (!auth.ok) return { ok: false, error: auth.reason === 'forbidden' ? 'not authorized' : 'unauthorized' }
+  const { supabase, user } = auth
 
   const from = (input.fromLabel ?? '').trim()
   const to = (input.toLabel ?? '').trim()
@@ -57,11 +55,9 @@ export async function mergePeople(input: {
   intoId: string
   intoLabel: string
 }): Promise<ActionResult> {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return { ok: false, error: 'unauthorized' }
+  const auth = await authorizeAction()
+  if (!auth.ok) return { ok: false, error: auth.reason === 'forbidden' ? 'not authorized' : 'unauthorized' }
+  const { supabase, user } = auth
 
   const fromLabel = (input.fromLabel ?? '').trim()
   const intoLabel = (input.intoLabel ?? '').trim()

@@ -1,20 +1,12 @@
 import Link from 'next/link'
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
 import { CaptureMenu } from '@/components/capture-menu'
 import { isOperator } from '@/lib/auth/operator'
+import { requireAllowedUser } from '@/lib/auth/guard'
 
 export default async function HomePage() {
-  const supabase = await createClient()
-
-  // Validate the user independently rather than trusting the middleware redirect.
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) {
-    redirect('/login')
-  }
+  // Authenticate + enforce the allowlist (the security boundary; middleware is UX
+  // only). Returns the RLS client + user, reused for the reads below.
+  const { supabase, user } = await requireAllowedUser()
 
   // In one parallel batch: is a mine in flight (the "building" banner), and does the
   // user have any captures yet (so a brand-new user gets a get-started hint rather

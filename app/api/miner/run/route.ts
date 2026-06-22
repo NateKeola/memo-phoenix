@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { authorizeApiUser } from '@/lib/auth/guard'
 import { isOperator } from '@/lib/auth/operator'
 import { mineWithLock } from '@memo/miner-core'
 import { isGithubDispatchConfigured, triggerMinerWorkflow } from '@/lib/miner/dispatch'
@@ -19,11 +19,9 @@ export const maxDuration = 300
 // duplicate call a no-op ('already_running'), so a remount or double-click cannot
 // start a colliding mine.
 export async function POST(request: NextRequest) {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  const auth = await authorizeApiUser()
+  if ('error' in auth) return auth.error
+  const { supabase, user } = auth
 
   const body = (await request.json().catch(() => ({}))) as { userId?: string; trigger?: string }
   // A user mines their OWN graph. Only the operator may target another user_id.

@@ -1,11 +1,10 @@
 'use server'
 
-import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
-import { isOperator, resolveSiteUrl } from '@/lib/auth/operator'
-import { inviteByEmail, deleteUser } from '@/lib/supabase/auth-admin'
+import { isOperator } from '@/lib/auth/operator'
+import { deleteUser } from '@/lib/supabase/auth-admin'
 import { normalizeEmail, isValidEmail, type Invite } from '@/lib/invites'
 import { logEvent } from '@/lib/telemetry'
 
@@ -21,27 +20,21 @@ async function requireOperator() {
   return { supabase, user }
 }
 
-async function requestOrigin(): Promise<string | undefined> {
-  const h = await headers()
-  const host = h.get('host')
-  if (!host) return undefined
-  const proto = h.get('x-forwarded-proto') ?? (host.startsWith('localhost') ? 'http' : 'https')
-  return `${proto}://${host}`
-}
+export type InviteState = { ok?: boolean; email?: string; error?: string }
 
-export type InviteState = { ok?: boolean; email?: string; actionLink?: string; error?: string; warning?: string }
-
-// Mints an invited account and returns its action link to the operator's screen
-// (via useActionState), so it works without SMTP. Public signups stay disabled;
-// this admin path is the only way an account is created.
+// Adds an email to the allowlist (the invites table). That is the WHOLE invite: no
+// account is created and no link is generated. The person then creates their own
+// account at /login with this exact email and a password (the allowlist is checked
+// there server-side, and again on every request by the route guard). Re-inviting a
+// revoked address re-arms it; an address that already has an account is rejected.
 export async function inviteAction(_prev: InviteState, formData: FormData): Promise<InviteState> {
   const { supabase, user } = await requireOperator()
   const email = normalizeEmail(String(formData.get('email') ?? ''))
   const note = String(formData.get('note') ?? '').trim() || null
   if (!isValidEmail(email)) return { error: 'Enter a valid email address.' }
 
-  // One invite per address. Re-inviting a still-pending or accepted address is a
-  // no-op for safety; a revoked address can be re-armed.
+  // One invite per address (the unique index is on lower(email)). An accepted
+  // address already has an account; a pending or revoked one can be (re-)armed.
   const { data: existing } = await supabase
     .from('invites')
     .select('*')
@@ -52,45 +45,32 @@ export async function inviteAction(_prev: InviteState, formData: FormData): Prom
     return { error: `${email} already has an account.` }
   }
 
-  // The invite link must resolve to the deployed site URL, never a silent localhost
-  // fallback in a deployed environment. A misconfiguration is loud (refused here).
-  const site = resolveSiteUrl(await requestOrigin())
-  if ('error' in site) return { error: site.error }
-  const redirectTo = `${site.url}/auth/callback?next=/onboarding`
-  let actionLink: string
-  let invitedUserId: string
-  try {
-    const res = await inviteByEmail({ email, redirectTo })
-    actionLink = res.actionLink
-    invitedUserId = res.userId
-  } catch (e) {
-    return { error: `Could not create the invite: ${e instanceof Error ? e.message : String(e)}` }
-  }
-
   if (existing) {
     await supabase
       .from('invites')
-      .update({ status: 'pending', invited_user_id: invitedUserId, note, accepted_at: null })
+      .update({ status: 'pending', note, invited_user_id: null, accepted_at: null })
       .eq('id', existing.id)
       .eq('user_id', user.id)
   } else {
     await supabase
       .from('invites')
-      .insert({ user_id: user.id, email, status: 'pending', invited_user_id: invitedUserId, note })
+      .insert({ user_id: user.id, email, status: 'pending', note })
   }
 
   await logEvent({
     user_id: user.id,
     event_type: 'invite_created',
     name: email,
-    attrs: { invitee_user_id: invitedUserId, reinvite: Boolean(existing) },
+    attrs: { reinvite: Boolean(existing) },
   })
   revalidatePath('/admin')
-  return { ok: true, email, actionLink, warning: site.warning }
+  return { ok: true, email }
 }
 
-// Withdraws an invite. If the invitee has not finished onboarding (status !=
-// accepted), the unused auth account is deleted so the link cannot be redeemed.
+// Withdraws an invite. Marks it revoked so the allowlist no longer admits the email
+// (the route guard locks the user out on their next request). If a half-onboarded
+// account exists (invited_user_id set, status != accepted), the unused account is
+// deleted too so it cannot linger.
 export async function revokeInviteAction(formData: FormData): Promise<void> {
   const { supabase, user } = await requireOperator()
   const id = String(formData.get('id') ?? '')

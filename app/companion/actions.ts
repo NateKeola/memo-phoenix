@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
+import { authorizeAction } from '@/lib/auth/guard'
 import { logEvent } from '@/lib/telemetry'
 
 // The companion does NOT send email or create calendar events. It writes only the
@@ -56,11 +57,9 @@ export async function setCommitmentState(input: {
   matchLabel?: string | null
   matchPersonId?: string | null
 }): Promise<StateResult> {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return { ok: false, error: 'unauthorized' }
+  const auth = await authorizeAction()
+  if (!auth.ok) return { ok: false, error: auth.reason === 'forbidden' ? 'not authorized' : 'unauthorized' }
+  const { supabase, user } = auth
   if (!['open', 'done', 'snoozed', 'dismissed'].includes(input.state)) return { ok: false, error: 'bad state' }
 
   const snoozeUntil =
@@ -98,11 +97,9 @@ export async function setFollowupTracking(input: {
   matchLabel?: string | null
   matchPersonId?: string | null
 }): Promise<StateResult> {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return { ok: false, error: 'unauthorized' }
+  const auth = await authorizeAction()
+  if (!auth.ok) return { ok: false, error: auth.reason === 'forbidden' ? 'not authorized' : 'unauthorized' }
+  const { supabase, user } = auth
 
   // normalize an empty date / person to null (clearing the field). Validate the
   // date BEFORE converting, so a bad value returns an error rather than throwing.

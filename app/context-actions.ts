@@ -1,6 +1,6 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
+import { authorizeAction } from '@/lib/auth/guard'
 import { writeCapture } from '@/lib/captures'
 import { parseTarget } from '@/lib/capture-target'
 import { logEvent } from '@/lib/telemetry'
@@ -18,11 +18,9 @@ export async function addContextNote(input: {
   targetId?: string
   source?: string // which surface this came from (person, follow_up, ...)
 }): Promise<ContextResult> {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return { ok: false, error: 'unauthorized' }
+  const auth = await authorizeAction()
+  if (!auth.ok) return { ok: false, error: auth.reason === 'forbidden' ? 'not authorized' : 'unauthorized' }
+  const { supabase, user } = auth
 
   const body = (input.body ?? '').trim()
   if (!body) return { ok: false, error: 'the note cannot be empty' }

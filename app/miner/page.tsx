@@ -1,6 +1,5 @@
 import Link from 'next/link'
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { requireAllowedUser } from '@/lib/auth/guard'
 import { MinerControl } from '@/components/miner-control'
 
 export const dynamic = 'force-dynamic'
@@ -9,11 +8,7 @@ export const dynamic = 'force-dynamic'
 // the PR for the settings-vs-tab-vs-widget options). RLS-scoped: the client only
 // reads the signed-in user's own runs and captures.
 export default async function MinerPage() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  await requireAllowedUser()
 
   return (
     <main style={{ padding: 24, fontFamily: 'system-ui, sans-serif', maxWidth: 680 }}>

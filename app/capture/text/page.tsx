@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { requireAllowedUser } from '@/lib/auth/guard'
 import { addTextCapture } from './actions'
 
 export default async function AddTextPage({
@@ -6,6 +7,7 @@ export default async function AddTextPage({
 }: {
   searchParams: Promise<{ ok?: string; error?: string }>
 }) {
+  await requireAllowedUser()
   const { ok, error } = await searchParams
 
   return (

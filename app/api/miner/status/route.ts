@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { authorizeApiUser } from '@/lib/auth/guard'
 
 export const runtime = 'nodejs'
 
@@ -7,11 +7,9 @@ export const runtime = 'nodejs'
 // (the SELECT policy on miner_runs is user_id = auth.uid()), so a user only ever
 // sees their own runs.
 export async function GET() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  const auth = await authorizeApiUser()
+  if ('error' in auth) return auth.error
+  const { supabase, user } = auth
 
   const { data } = await supabase
     .from('miner_runs')

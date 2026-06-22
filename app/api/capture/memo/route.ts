@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { authorizeApiUser } from '@/lib/auth/guard'
 import { writeCapture } from '@/lib/captures'
 import { transcribe } from '@/lib/stt'
 import { parseTarget } from '@/lib/capture-target'
@@ -11,11 +11,9 @@ import { logEvent } from '@/lib/telemetry'
 export const runtime = 'nodejs'
 
 export async function POST(request: NextRequest) {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  const auth = await authorizeApiUser()
+  if ('error' in auth) return auth.error
+  const { supabase, user } = auth
 
   const contentType = request.headers.get('content-type') || 'audio/webm'
   const audio = Buffer.from(await request.arrayBuffer())

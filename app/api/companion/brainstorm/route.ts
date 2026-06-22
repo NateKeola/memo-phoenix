@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { authorizeApiUser } from '@/lib/auth/guard'
 import { logEvent } from '@/lib/telemetry'
 import { runChat, type ChatTurn } from '@/lib/chat/agent'
 import { brainstormSystemPrompt } from '@/lib/companion/brainstorm'
@@ -37,11 +37,9 @@ function friendlyError(err: unknown): string {
 }
 
 export async function POST(request: NextRequest) {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  const auth = await authorizeApiUser()
+  if ('error' in auth) return auth.error
+  const { supabase, user } = auth
 
   const body = (await request.json().catch(() => ({}))) as { seed?: unknown; messages?: unknown }
   const seed = typeof body.seed === 'string' ? body.seed : ''
