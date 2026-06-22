@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { authorizeApiUser } from '@/lib/auth/guard'
 import { composeBrief, composePersonBrief, composeTopicBrief, type Brief } from '@/lib/interview/briefing'
 import {
   composeSystemPrompt,
@@ -17,11 +17,9 @@ export const runtime = 'nodejs'
 // URL. The client connects with the signed URL and applies the system prompt +
 // first message as conversation_config_override.
 export async function POST(request: NextRequest) {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  const auth = await authorizeApiUser()
+  if ('error' in auth) return auth.error
+  const { supabase, user } = auth
 
   const body = (await request.json().catch(() => ({}))) as {
     mode?: string

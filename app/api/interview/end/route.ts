@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { authorizeApiUser } from '@/lib/auth/guard'
 import { fetchTranscript } from '@/lib/elevenlabs'
 import { logEvent } from '@/lib/telemetry'
 
@@ -10,11 +10,9 @@ export const runtime = 'nodejs'
 // (mode='interview') linked to the session, and marks the session ended. The
 // miner picks the capture up on its next run exactly like a memo or text capture.
 export async function POST(request: NextRequest) {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  const auth = await authorizeApiUser()
+  if ('error' in auth) return auth.error
+  const { supabase, user } = auth
 
   const body = (await request.json().catch(() => ({}))) as {
     sessionId?: string
