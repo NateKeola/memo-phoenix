@@ -80,7 +80,7 @@ This is not a public app. The control is on the remote Supabase project: signups
 
 ## Interview agent (PR3)
 
-The "Start interview" path opens a voice conversation with Memo in two modes that share one system prompt (the bible at `packages/miner-core/prompts/memo-companion-bible.md`, bundled to `lib/interview/bible.generated.ts` via `npm run bible:generate`):
+The "Start interview" path opens a voice conversation with Memo in two modes that share one system prompt (the bible at `packages/miner-core/prompts/memo-companion-bible-v2-lean.md`, bundled to `lib/interview/bible.generated.ts` via `npm run bible:generate`):
 
 - **Open brain-dump** — bible only, blank slate, available any time.
 - **Daily check-in** — a deterministic briefing (`lib/interview/briefing.ts`) reads your canonical graph and composes a short brief (recent threads, open follow-ups, plus a couple of stubbed resurfacing items), injected alongside the bible.

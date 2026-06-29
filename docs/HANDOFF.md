@@ -2,7 +2,7 @@
 
 This file plus `CLAUDE.md` (the decision log especially) is the complete pickup point. A fresh session should read both before doing anything. The authoritative scope and architecture live in `docs/memo-phoenix-spec.md`; this file is the operational state on top of it.
 
-Last updated: 2026-06-19.
+Last updated: 2026-06-28.
 
 ## What this is
 
@@ -61,7 +61,7 @@ Tables that are MUTABLE (no append-only/history trigger), because they are opera
 - Phase 2 Unit 2 files: `lib/miner/state.ts` (the new-context measure + `AUTO_RUN_NEW_CAPTURES` threshold + ledger summarize), `components/miner-control.tsx`, `components/auto-mine-on-load.tsx`, `scripts/check-miner-state.mjs` (a live measure diagnostic, not a security guard).
 - `components/`: `capture-menu`, `chat`, `context-adder`, `person-corrections`, `companion/companion-view`, `admin/invite-form`, `onboarding-interview`, `building-status`.
 - `scripts/`: `check-retrieval.ts`, `check-companion.ts`, `check-context.ts` (offline tsx checks); `check-rls.mjs`, `check-multiuser.mjs`, `check-invite.mjs` (live security/invite guards, zero-dep node:https).
-- Prompt discipline: editing a `prompts/*.md` requires regenerating and committing the `.generated.ts` (runtime fs reads fail on Vercel). Generators: `npm run prompts:generate`, `npm run bible:generate`.
+- Prompt discipline: editing a `prompts/*.md` requires regenerating and committing the `.generated.ts` (runtime fs reads fail on Vercel). Generators: `npm run prompts:generate`, `npm run bible:generate`. When a prompt is deprecated and replaced, move the old version to the local gitignored `reference/OldPrompts/` archive (git history is the durable record), name the replacement with a version suffix (e.g. `-v2-lean`), and repoint the generator's `src`. The active companion bible is `memo-companion-bible-v2-lean.md`.
 
 ## The capture-with-target mechanism (PR #10, reusable)
 
