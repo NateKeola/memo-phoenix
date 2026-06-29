@@ -32,7 +32,10 @@ export default async function AdminPage() {
         <Link href="/">&larr; Home</Link>
       </p>
       <h1>Invites</h1>
-      <p>Invite a specific person by email. Only invited addresses can create an account.</p>
+      <p>
+        Add a person to the allowlist by email. They then create their own account at the sign-in
+        page with that email and a password. Only allowlisted addresses can register.
+      </p>
 
       <InviteForm />
 

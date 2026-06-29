@@ -1,6 +1,6 @@
 import Link from 'next/link'
-import { notFound, redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { notFound } from 'next/navigation'
+import { requireAllowedUser } from '@/lib/auth/guard'
 import { duplicateCandidates, getPersonDetail, listPeople, type RetrievalDeps } from '@/lib/people'
 import { PersonCorrections } from '@/components/person-corrections'
 import { ContextAdder } from '@/components/context-adder'
@@ -16,11 +16,7 @@ function field(data: Record<string, unknown>, key: string): string | null {
 // controls (rename, merge).
 export default async function PersonPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requireAllowedUser()
 
   const deps: RetrievalDeps = { supabase, userId: user.id }
   const person = await getPersonDetail(deps, id)

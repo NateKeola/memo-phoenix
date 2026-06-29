@@ -1,6 +1,5 @@
 import Link from 'next/link'
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { requireAllowedUser } from '@/lib/auth/guard'
 import { listPeople } from '@/lib/people'
 import { ContextAdder } from '@/components/context-adder'
 
@@ -8,11 +7,7 @@ export const dynamic = 'force-dynamic'
 
 // The contact sheet (spec §11): the people in the graph, RLS-scoped, navigable.
 export default async function PeoplePage() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requireAllowedUser()
 
   const people = await listPeople({ supabase, userId: user.id })
 

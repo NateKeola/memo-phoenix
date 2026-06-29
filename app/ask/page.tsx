@@ -1,16 +1,11 @@
 import Link from 'next/link'
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
 import { Chat } from '@/components/chat'
+import { requireAllowedUser } from '@/lib/auth/guard'
 
-// The ask/chat surface. Always accessible to the signed-in user (no baseline
-// gate, by decision). Validates the user independently of the middleware.
+// The ask/chat surface. Always accessible to an allowlisted signed-in user (no
+// baseline gate, by decision).
 export default async function AskPage() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  await requireAllowedUser()
 
   return (
     <main style={{ padding: 24, fontFamily: 'system-ui, sans-serif', maxWidth: 720 }}>

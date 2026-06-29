@@ -1,5 +1,4 @@
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { requireAllowedUser } from '@/lib/auth/guard'
 import { BuildingStatus } from '@/components/building-status'
 
 export const dynamic = 'force-dynamic'
@@ -13,11 +12,7 @@ export default async function BuildingPage({
 }: {
   searchParams: Promise<{ from?: string }>
 }) {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  await requireAllowedUser()
 
   const { from } = await searchParams
   const onboarding = from === 'onboarding'

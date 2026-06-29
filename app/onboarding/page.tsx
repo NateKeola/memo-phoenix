@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { requireAllowedUser } from '@/lib/auth/guard'
 import { OnboardingInterview } from '@/components/onboarding-interview'
 
 export const dynamic = 'force-dynamic'
@@ -8,11 +8,7 @@ export const dynamic = 'force-dynamic'
 // (the middleware gate forces it until app_metadata.onboarded is set). It is a
 // warm first conversation that seeds their graph from minute one.
 export default async function OnboardingPage() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { user } = await requireAllowedUser()
 
   // Already onboarded? Don't trap them here.
   if ((user.app_metadata as { onboarded?: boolean } | undefined)?.onboarded === true) {

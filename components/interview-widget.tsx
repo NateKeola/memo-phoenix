@@ -3,6 +3,14 @@
 import Link from 'next/link'
 import { ConversationProvider, useConversation } from '@elevenlabs/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  DebugReadout,
+  describeDisconnect,
+  diagnosticCallbacks,
+  newVadState,
+  useInterviewDebug,
+  useLiveStatus,
+} from '@/components/interview-debug'
 
 type Mode = 'open' | 'daily'
 type Phase = 'choose' | 'connecting' | 'live' | 'saving' | 'done' | 'error'
@@ -49,6 +57,21 @@ function Interview() {
   const targetIdRef = useRef<string | null>(null)
   const [target, setTarget] = useState<{ kind: 'person' | 'topic'; id?: string; seed?: string; label?: string } | null>(null)
 
+  // --- temporary beta instrumentation (interview-end investigation) ---
+  const { lines: dbgLines, log } = useInterviewDebug('capture')
+  const vadRef = useRef(newVadState())
+  // Mount/unmount of the live conversation widget: if the agent stops because this
+  // component is being torn down (the remount theory), "widget UNMOUNTING" logs right
+  // before the disconnect.
+  useEffect(() => {
+    log('widget mounted')
+    return () => log('widget UNMOUNTING')
+  }, [log])
+  useEffect(() => {
+    log(`phase -> ${phase}`)
+  }, [phase, log])
+  // ---
+
   useEffect(() => () => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current)
   }, [])
@@ -63,13 +86,18 @@ function Interview() {
   }, [])
 
   const conversation = useConversation({
+    ...diagnosticCallbacks(log, vadRef),
     onConnect: (props: { conversationId?: string }) => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current)
       if (props?.conversationId) convIdRef.current = props.conversationId
+      log(`onConnect conversationId=${props?.conversationId ?? '?'}`)
       setPhase('live')
     },
-    onDisconnect: () => {
-      // The End button drives the save flow; nothing to do here.
+    onDisconnect: (details: unknown) => {
+      // The End button drives the save flow; nothing to do here. We only LOG why the
+      // session ended (reason=user is our own teardown; reason=agent/error is a server
+      // close) so a live run shows the cause instead of silently dropping it.
+      log(`onDisconnect ${describeDisconnect(details)}`)
     },
     // Best-effort live captions; the authoritative transcript is fetched server-side at end.
     onMessage: (m: unknown) => {
@@ -77,14 +105,18 @@ function Interview() {
       const text = typeof m === 'string' ? m : obj.message
       if (!text) return
       const role = String(obj.role ?? obj.source ?? 'agent')
+      log(`message [${role}] ${String(text).slice(0, 60)}`)
       linesRef.current = [...linesRef.current, { role, text: String(text) }]
       setLines(linesRef.current)
     },
     onError: (e: unknown) => {
+      log(`onError ${e instanceof Error ? e.message : String(e)}`)
       setError(e instanceof Error ? e.message : String(e))
       setPhase('error')
     },
   })
+
+  const liveStatus = useLiveStatus(conversation, phase === 'connecting' || phase === 'live', log, vadRef)
 
   const start = useCallback(
     async (m: Mode) => {
@@ -106,15 +138,19 @@ function Interview() {
       }, 20000)
       try {
         try {
-          await navigator.mediaDevices.getUserMedia({ audio: true })
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+          const t = stream.getAudioTracks()[0]
+          log(`mic permission granted: tracks=${stream.getAudioTracks().length} state=${t?.readyState} enabled=${t?.enabled} muted=${t?.muted}`)
         } catch (e) {
           const name = (e as DOMException)?.name
+          log(`getUserMedia failed: ${name ?? (e instanceof Error ? e.message : String(e))}`)
           throw new Error(
             name === 'NotAllowedError'
               ? 'Microphone access denied. Enable the mic in your browser settings and try again.'
               : `Microphone unavailable: ${e instanceof Error ? e.message : String(e)}`
           )
         }
+        log('POST /api/interview/start')
         const res = await fetch('/api/interview/start', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -141,6 +177,7 @@ function Interview() {
           // overrides require the agent's dashboard override toggles to be ON;
           // otherwise ElevenLabs rejects the session (see README). The conversation
           // id arrives via onConnect.
+          log(`startSession() (promptLen=${(cfg.systemPrompt ?? '').length} firstMsgLen=${(cfg.firstMessage ?? '').length})`)
           await conversation.startSession({
             signedUrl: cfg.signedUrl,
             connectionType: 'websocket',
@@ -151,6 +188,7 @@ function Interview() {
               },
             },
           })
+          log('startSession() resolved')
         } catch (e) {
           throw new Error(
             `Could not start the conversation (${e instanceof Error ? e.message : String(e)}). If this mentions overrides, enable the agent's "System prompt" and "First message" override toggles in the ElevenLabs dashboard (Security).`
@@ -162,10 +200,11 @@ function Interview() {
         setPhase('error')
       }
     },
-    [conversation, target]
+    [conversation, target, log]
   )
 
   const end = useCallback(async () => {
+    log('end() invoked by user -> endSession()')
     setPhase('saving')
     try {
       await conversation.endSession()
@@ -192,7 +231,7 @@ function Interview() {
       setError(e instanceof Error ? e.message : String(e))
       setPhase('error')
     }
-  }, [conversation])
+  }, [conversation, log])
 
   return (
     <div>
@@ -244,6 +283,8 @@ function Interview() {
           ))}
         </div>
       ) : null}
+
+      <DebugReadout title="/capture/interview" status={liveStatus} lines={dbgLines} />
     </div>
   )
 }

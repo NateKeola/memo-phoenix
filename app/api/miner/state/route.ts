@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { authorizeApiUser } from '@/lib/auth/guard'
 import { getMinerState } from '@/lib/miner/state'
 
 export const runtime = 'nodejs'
@@ -9,11 +9,9 @@ export const runtime = 'nodejs'
 // progress-toward-auto-run bar. RLS-scoped (miner_runs + captures SELECT policies
 // are user_id = auth.uid()), so a user only ever sees their own state.
 export async function GET() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  const auth = await authorizeApiUser()
+  if ('error' in auth) return auth.error
+  const { supabase, user } = auth
 
   const state = await getMinerState(supabase, user.id)
   return NextResponse.json(state)

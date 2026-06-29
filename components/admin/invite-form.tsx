@@ -3,9 +3,9 @@
 import { useActionState } from 'react'
 import { inviteAction, type InviteState } from '@/app/admin/actions'
 
-// Operator-only invite form. On success it shows the generated invite link inline
-// (no SMTP required: the operator copies it and shares it however). If SMTP is
-// configured in Supabase, the invitee is also emailed the same link.
+// Operator-only invite form. Inviting just adds the email to the allowlist; there
+// is no link to copy and no email sent. The person creates their own account at the
+// sign-in page with that email and a password.
 export function InviteForm() {
   const [state, action, pending] = useActionState<InviteState, FormData>(inviteAction, {})
 
@@ -20,23 +20,12 @@ export function InviteForm() {
       </form>
 
       {state?.error ? <p style={{ color: 'crimson' }}>{state.error}</p> : null}
-      {state?.warning ? <p style={{ color: '#b8860b' }}>{state.warning}</p> : null}
 
-      {state?.ok && state.actionLink ? (
+      {state?.ok ? (
         <div style={{ marginTop: 12, background: '#f5f5f5', padding: 12, borderRadius: 8 }}>
-          <p style={{ margin: '0 0 6px' }}>
-            Invited <strong>{state.email}</strong>. Send them this link to set up their account:
-          </p>
-          <textarea
-            readOnly
-            value={state.actionLink}
-            onFocus={(e) => e.currentTarget.select()}
-            rows={3}
-            style={{ width: '100%', fontFamily: 'monospace', fontSize: 12 }}
-          />
-          <p style={{ margin: '6px 0 0', fontSize: 12, color: '#666' }}>
-            The link logs them in and starts their onboarding interview. It also goes
-            out by email if Supabase SMTP is configured.
+          <p style={{ margin: 0 }}>
+            Invited <strong>{state.email}</strong>. They can now create their account at the sign-in
+            page using this email and a password they choose.
           </p>
         </div>
       ) : null}

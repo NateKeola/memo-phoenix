@@ -1,6 +1,5 @@
 import Link from 'next/link'
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { requireAllowedUser } from '@/lib/auth/guard'
 import { getToday } from '@/lib/companion/today'
 import { logEvent } from '@/lib/telemetry'
 import { CompanionView } from '@/components/companion/companion-view'
@@ -11,11 +10,7 @@ export const dynamic = 'force-dynamic'
 // model calls are the on-demand brainstorm conversations. It suggests reaching out
 // in real life and never sends anything.
 export default async function CompanionPage() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requireAllowedUser()
 
   const today = await getToday({ supabase, userId: user.id }, Date.now())
 

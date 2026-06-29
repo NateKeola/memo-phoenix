@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { authorizeApiUser } from '@/lib/auth/guard'
 import { setOnboarded } from '@/lib/supabase/auth-admin'
 import { markInviteAccepted } from '@/lib/invites'
 import { logEvent } from '@/lib/telemetry'
@@ -11,11 +11,9 @@ export const runtime = 'nodejs'
 // and flips their invite to accepted. The actual mine is kicked off by the
 // /building page (the Vercel run route or the Action), so this stays fast.
 export async function POST() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  const auth = await authorizeApiUser()
+  if ('error' in auth) return auth.error
+  const { user } = auth
 
   try {
     await setOnboarded(user.id)

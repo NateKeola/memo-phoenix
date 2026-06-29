@@ -44,6 +44,20 @@ export async function isInvited(email: string): Promise<boolean> {
   return Boolean(data)
 }
 
+// Links the freshly created account to its invite row at signup time. The account
+// is now minted when the invitee chooses a password (not at invite time), so we
+// stamp invited_user_id here so markInviteAccepted (keyed on it) works at the end
+// of onboarding and revoke can delete an unused account. Service-role because the
+// row is operator-owned (the invitee cannot write it under RLS). Skips revoked rows.
+export async function linkInviteAccount(email: string, userId: string): Promise<void> {
+  const admin = createAdminClient()
+  await admin
+    .from('invites')
+    .update({ invited_user_id: userId })
+    .eq('email', normalizeEmail(email))
+    .neq('status', 'revoked')
+}
+
 // Marks an invite accepted once its invitee finishes onboarding. Runs as the
 // service role because the actor here is the INVITEE (not the operator who owns
 // the row), so the RLS client could not update it. Scoped by the invitee's own

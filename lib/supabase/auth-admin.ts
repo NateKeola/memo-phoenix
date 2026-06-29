@@ -6,36 +6,45 @@ import { createAdminClient } from '@/lib/supabase/admin'
 // from that toggle, so minting an account requires this server-only path. The
 // service-role key never reaches the browser (lib/supabase/admin.ts is server-only).
 
-// Creates (or re-arms) an invited account and returns its action link. We use
-// generateLink(type:'invite') rather than inviteUserByEmail so the operator gets
-// the link back directly and can share it even when no SMTP is configured (a small
-// trusted beta). If SMTP IS configured, Supabase also emails it. We then stamp
-// app_metadata.invited so the onboarding gate can recognize a first-run user
-// WITHOUT a database round-trip (the flag rides in the JWT). The pre-existing
-// operator has no such flag and is therefore never forced into onboarding.
-export async function inviteByEmail(opts: {
+// Sentinel the create-account action can branch on: the email already has an
+// account, so the person should sign in instead of registering.
+export class AccountExistsError extends Error {
+  constructor(email: string) {
+    super(`An account already exists for ${email}.`)
+    this.name = 'AccountExistsError'
+  }
+}
+
+// Mints the allowlisted user's account with their chosen password and returns its
+// id. NO email is sent: public signups stay disabled and this admin path is exempt
+// from that toggle, and email_confirm:true pre-confirms the address so there is no
+// verification step (the allowlist already established the user is approved). The
+// caller (the create-account action) checks the invite allowlist BEFORE calling
+// this, then signs the user in with the same password. We stamp app_metadata so the
+// onboarding gate recognizes a first-run user WITHOUT a DB round-trip (the flag
+// rides in the JWT); the pre-existing operator has no such flag and is never forced
+// into onboarding.
+export async function createInvitedAccount(opts: {
   email: string
-  redirectTo: string
-}): Promise<{ actionLink: string; userId: string }> {
+  password: string
+}): Promise<{ userId: string }> {
   const admin = createAdminClient()
-  const { data, error } = await admin.auth.admin.generateLink({
-    type: 'invite',
+  const { data, error } = await admin.auth.admin.createUser({
     email: opts.email,
-    options: { redirectTo: opts.redirectTo },
+    password: opts.password,
+    email_confirm: true,
+    app_metadata: { invited: true, onboarded: false },
   })
-  if (error) throw error
-  const actionLink = data?.properties?.action_link
+  if (error) {
+    // GoTrue returns a 422 "already been registered" when the email exists.
+    if (/already.*registered|already.*exists/i.test(error.message)) {
+      throw new AccountExistsError(opts.email)
+    }
+    throw error
+  }
   const userId = data?.user?.id
-  if (!actionLink || !userId) throw new Error('generateLink returned no action link / user')
-
-  // Merge invited=true into app_metadata (do not clobber anything Supabase set).
-  const existing = (data.user.app_metadata ?? {}) as Record<string, unknown>
-  const { error: metaErr } = await admin.auth.admin.updateUserById(userId, {
-    app_metadata: { ...existing, invited: true, onboarded: false },
-  })
-  if (metaErr) throw metaErr
-
-  return { actionLink, userId }
+  if (!userId) throw new Error('createUser returned no user')
+  return { userId }
 }
 
 // Marks onboarding complete in app_metadata. Tamper-resistant: app_metadata is
