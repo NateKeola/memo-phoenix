@@ -12,7 +12,9 @@ const root = resolve(here, '..')
 // Each entry: a source .md (the authored source of truth) -> a generated .ts const.
 const BIBLES = [
   {
-    src: 'packages/miner-core/prompts/memo-companion-bible.md',
+    // v2-lean is the active companion bible. The deprecated v1 lives in the
+    // local reference/OldPrompts archive (gitignored) and in git history.
+    src: 'packages/miner-core/prompts/memo-companion-bible-v2-lean.md',
     out: 'lib/interview/bible.generated.ts',
     name: 'MEMO_COMPANION_BIBLE',
   },
