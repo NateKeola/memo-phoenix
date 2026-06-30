@@ -1,0 +1,101 @@
+== Incremental equivalence + perf harness ==
+source corpus: natekeola@icloud.com (capped to 6)
+cloning 6 captures
+split: baseline 4 + fold 2
+
+>>> MINE A full (whole corpus, noise-floor arm 1): user=19afd3cc MINER_INCREMENTAL=0
+    A full (whole corpus, noise-floor arm 1) done in 579.8s (attempt 1); llmCalls=14 tokensIn=59449 tokensOut=44598
+
+>>> MINE D full (whole corpus, noise-floor arm 2 + equivalence baseline): user=63486860 MINER_INCREMENTAL=0
+    D full (whole corpus, noise-floor arm 2 + equivalence baseline) done in 707.1s (attempt 1); llmCalls=14 tokensIn=67855 tokensOut=54502
+
+>>> MINE C baseline (4, full branch): user=1e334424 MINER_INCREMENTAL=1
+    C baseline (4, full branch) done in 465.8s (attempt 1); llmCalls=12 tokensIn=47654 tokensOut=35819
+
+>>> MINE C incremental fold (+2): user=1e334424 MINER_INCREMENTAL=1
+    C incremental fold (+2) done in 147.8s (attempt 1); llmCalls=9 tokensIn=28843 tokensOut=10388
+
+(snapshots persisted to /tmp/harness-snapshots-1782856998790.json)
+
+--- NOISE FLOOR: two independent full mines, separate users (LLM nondeterminism yardstick) ---
+    (by normalized label; raw = all label differences, genuine = after pairing off cosmetic label drift)
+  canonical_people         A= 31 B= 32 common= 26 drift=  4 rawSym= 11 GENUINE=  3
+      genuine onlyA: karalea
+      genuine onlyB: kara lee, sukah
+  canonical_places_orgs    A= 28 B= 32 common= 25 drift=  2 rawSym= 10 GENUINE=  6
+      genuine onlyA: the brewery
+      genuine onlyB: spacex, oracle / netsuite, flawless, billiontoone, santana formal
+  canonical_projects       A=  7 B=  8 common=  5 drift=  1 rawSym=  5 GENUINE=  3
+      genuine onlyA: lisa's business
+      genuine onlyB: memo phoenix, clipboard health territory account executive
+  canonical_events         A= 11 B= 11 common=  4 drift=  4 rawSym= 14 GENUINE=  6
+      genuine onlyA: high school graduation, brother opened first restaurant in dallas, sales route in west covina
+      genuine onlyB: sales route to skilled nursing facilities, richards family moved to moss beach, nate's birthday
+  canonical_facts          A= 30 B= 32 common=  9 drift= 10 rawSym= 44 GENUINE= 24
+      genuine onlyA: works in long-term hiring sales for skilled nursing via clipboard health, has visited ~140 facilities in l.a. county, surfs, including night surfing, since march 2020, prefers riding short boards, switched from baseball to volleyball in eighth grade, was starting setter at usc, then cut from the team, always orders pastrami reuben at johnny's pastrami, likes to eat in the car, cole richards has a dog named sukah, birthday is march 27th
+      genuine onlyB: birthday march 27, graduated high school in 2020, played baseball then volleyball, usc volleyball walk-on, lives in santa monica, loves to surf, started surfing march 2020, rides shortboards, likes brightly colored boards, plays beach volleyball, favorite meal: johnny's pastrami reuben
+  canonical_commitments    A=  6 B=  7 common=  1 drift=  3 rawSym= 11 GENUINE=  5
+      genuine onlyA: big board fix for damaged surfboards, work on interview agent with todd
+      genuine onlyB: do a big board fix, design new prompts for the interview agent, help develop the college tour
+  canonical_relationships  A= 10 B= 23 common=  6 drift=  2 rawSym= 21 GENUINE= 17
+      genuine onlyA: name is nate member_of trident ember defense, jacob tennant lives_at the brewery
+      genuine onlyB: favorite surfboard is the pyzalian 1 shaped_by john pyzel, sukah family_dog_of cole richards, karen grandmother_of morgan alexander peterson, todd gavin co_founded trident ember defense, cole richards co_founded trident ember defense, tim richards father_of cole richards, kyle skinner child_of ron skinner, kyle skinner child_of jen skinner, linnea skinner child_of ron skinner, linnea skinner child_of jen skinner
+  insights                 A=  8 B=  8 common=  0 drift=  1 rawSym= 16 GENUINE= 14
+      genuine onlyA: todd is the connective tissue of nate's whole life: best friend and business co-founder (mine, interview agent, trident), neighbor living across the street, surf buddy who shares boards, the friend he met at the usc surf club, and his collaborator on lisa's college tour work. nearly every domain — work, home, hobby, family business — routes through one person., both of nate's startup co-founders — todd and cole — are also his closest friends (best friend and best-friend-since-eighth-grade). his business life and his core friendships are almost completely fused, which concentrates a lot of relational risk in the success or failure of shared ventures like trident., surfing is the social backbone of nate's life, not just a hobby. the usc surf club is where he met todd and connects to sean yonka; his board obsession (~18 boards) ties him to shaper john pyzel and painter andy smalley; and his surf plans pull in friends like cole and tal. the sport quietly organizes a large share of his relationships., nate has built a network of surrogate family alongside his blood relatives: karalea (cole's mom) is a 'mother figure,' and the skinners in goleta read like an extended family whose milestones he tracks closely — ron's 60th, jen's upcoming birthday, kyle's kids bo and ollie. these chosen-family bonds run as deep as his ties to his own parents and grandmother., september 2023 was a hinge in nate's life: he met his girlfriend morgan the very same week he was cut from the usc volleyball team. a door on his athletic identity closed just as a major relationship opened — a coincidence worth noticing in how he frames that period., there's a recurring pull between entrepreneurship and income stability. trident ember defense was explicitly paused 'to focus on jobs and income,' and nate just started at clipboard health awaiting his first paycheck — yet he's still actively building mine and the interview agent with todd. the stated need for income and the continued startup-building point in opposite directions., volleyball is the throughline of nate's bond with his dad brian: brian played volleyball, nate switched to it in eighth grade and played all the way to usc, and they spent father's day weekend playing together with the ronsters at manhattan beach. the sport is their shared language across generations.
+      genuine onlyB: todd is the connective tissue across nearly every part of nate's non-day-job life: best friend, neighbor across the street, surf-club origin, surfboard-sharing partner, and co-founder/collaborator on trident ember defense, mine, the interview agent, and the college tour. almost all of nate's creative and entrepreneurial energy routes through one relationship., nate's mother kristen surfaces only once and only as 'the arborist in washington who met brian in kauai,' while his father appears with far more texture and a dedicated father's day plan. the asymmetry suggests his mom is comparatively out of frame in his current life., surfing — now central to nate's identity, social circle, and an 18-board collection — began in march 2020 at the exact moment covid ended his senior year of high school. a hobby born from a disrupted graduation has grown into the organizing thread of his friendships (todd, cole, tal, sean) and free time., morgan, nate's girlfriend, is job-hunting and hoping to move to santa monica — exactly where nate lives — which points toward a near-term cohabitation step, yet nothing in the record shows nate actively supporting or planning around that move despite its bearing on their relationship., nate has accumulated bills he's waiting to clear with a first paycheck of only a couple thousand dollars, yet he owns about 18 surfboards and describes loving to buy more on facebook marketplace (plus a taste for yeti gear). the tight near-term finances sit in tension with an ongoing collector's spending habit., cole is one of nate's oldest best friends (known since eighth grade) and a trident ember defense co-founder, but the company is now paused and cole's whole family just relocated from palo alto to moss beach in norcal — putting real distance between nate and a core friendship that surfing and the business used to anchor., september 2023 was a hinge month: nate was cut from the usc volleyball team — ending a sport he'd been building toward since switching from baseball in eighth grade and walking on as starting setter — the very same week he met morgan, now his girlfriend and best friend. a loss and a foundational relationship landed together.
+  canonical_relationships  A= 10 B= 23 common=  6 drift=  2 rawSym= 21 GENUINE= 17
+      genuine onlyA: name is nate|member_of|trident ember defense, jacob tennant|lives_at|the brewery
+      genuine onlyB: favorite surfboard is the pyzalian 1|shaped_by|john pyzel, sukah|family_dog_of|cole richards, karen|grandmother_of|morgan alexander peterson, todd gavin|co_founded|trident ember defense, cole richards|co_founded|trident ember defense, tim richards|father_of|cole richards, kyle skinner|child_of|ron skinner, kyle skinner|child_of|jen skinner, linnea skinner|child_of|ron skinner, linnea skinner|child_of|jen skinner
+
+--- EQUIVALENCE: C incremental vs D full (the test) ---
+    (by normalized label; raw = all label differences, genuine = after pairing off cosmetic label drift)
+  canonical_people         A= 32 B= 32 common= 28 drift=  3 rawSym=  8 GENUINE=  2
+      genuine onlyA: todd
+      genuine onlyB: sukah
+  canonical_places_orgs    A= 29 B= 32 common= 24 drift=  2 rawSym= 13 GENUINE=  9
+      genuine onlyA: l.a. county, trident ember defense, usc surf club
+      genuine onlyB: leo carrillo, zeros, kauai, hawaii, huntington, oracle / netsuite, whittier
+  canonical_projects       A=  9 B=  8 common=  6 drift=  1 rawSym=  5 GENUINE=  3
+      genuine onlyA: clipboard facility visits, surfboard repairs
+      genuine onlyB: clipboard health territory account executive
+  canonical_events         A= 10 B= 11 common=  4 drift=  3 rawSym= 13 GENUINE=  7
+      genuine onlyA: cole and karalea move to moss beach, graduated high school, drove to whittier for work
+      genuine onlyB: richards family moved to moss beach, college tour discussion, jen skinner's birthday, nate's birthday
+  canonical_facts          A= 29 B= 32 common= 13 drift= 10 rawSym= 35 GENUINE= 15
+      genuine onlyA: switched from baseball to volleyball in 8th grade, buys surfboards and other items on facebook marketplace, has visited about 140 facilities in l.a. county, works in long-term hiring sales for skilled nursing facilities, has been surfing since march 2020, loves buying beautifully colored surfboards
+      genuine onlyB: graduated high school in 2020, played baseball then volleyball, usc volleyball walk-on, started surfing march 2020, rides shortboards, likes brightly colored boards, favorite surfboard is the pyzalian 1, buys boards on facebook marketplace, sells hiring platform for nursing facilities, visited ~140 la county facilities
+  canonical_commitments    A=  6 B=  7 common=  4 drift=  2 rawSym=  5 GENUINE=  1
+      genuine onlyB: help develop the college tour
+  canonical_relationships  A= 20 B= 23 common=  7 drift=  6 rawSym= 29 GENUINE= 17
+      genuine onlyA: name is nate co_founder_of trident ember defense, cole richards son_of kara lee, kyle skinner married_to paloma, jacob tennant brother_of name is nate, kareem manages name is nate, justin keating works_with name is nate, andy smalley friend_of john pyzel
+      genuine onlyB: favorite surfboard is the pyzalian 1 shaped_by john pyzel, sukah family_dog_of cole richards, karen grandmother_of morgan alexander peterson, todd gavin co_founded trident ember defense, cole richards co_founded trident ember defense, kyle skinner child_of jen skinner, linnea skinner child_of ron skinner, linnea skinner child_of jen skinner, bo skinner child_of paloma skinner, ollie skinner child_of paloma skinner
+  insights                 A=  9 B=  8 common=  0 drift=  1 rawSym= 17 GENUINE= 15
+      genuine onlyA: september 2023 was a hinge moment in nate's life — the same week he was cut from the usc volleyball team, he met his girlfriend morgan. one door closing coincided exactly with another opening., there's a builder streak that runs in the family: nate's grandmother dolores founded santana formal from scratch, and nate — who calls himself a natural salesman — co-founded trident ember defense and keeps launching ventures. the entrepreneurial instinct appears inherited., there's an unresolved pull between entrepreneurial ambition and financial security: trident ember defense is on hold specifically because the founders 'took jobs for money,' yet nate insists 'the journey isn't over.' his day job funds the very pause on the dream he won't abandon., nate's work and family are entangled through lisa hennessy: she's his stepmom and the founder of the college tour, the very company he and todd are dedicating effort to grow. professional collaboration and family loyalty blur together here., nate's relationships with his two parents are strikingly asymmetric: his dad brian appears throughout — building the family house, father's day volleyball, shared sports history — while his mom kristen, an arborist in washington, surfaces only once with no recent contact or plans noted., nate's best friend since eighth grade, cole, recently moved to moss beach in norcal while nate is rooted in santa monica — putting hundreds of miles between two people who co-founded a company and used to surf together., volleyball is a core thread of identity that has survived rejection: nate switched to it in 8th grade, walked on at usc and became starting setter only to be cut, yet he's still playing sunday beach volleyball with the ronsters more than a decade running. the sport outlasted the disappointment., on top of a demanding day job at clipboard health (driving la county visiting ~140 facilities), nate is simultaneously building an interview agent, developing software, helping grow the college tour, and keeping trident ember defense alive — a heavy slate of parallel ventures.
+      genuine onlyB: nate's mother kristen surfaces only once and only as 'the arborist in washington who met brian in kauai,' while his father appears with far more texture and a dedicated father's day plan. the asymmetry suggests his mom is comparatively out of frame in his current life., surfing — now central to nate's identity, social circle, and an 18-board collection — began in march 2020 at the exact moment covid ended his senior year of high school. a hobby born from a disrupted graduation has grown into the organizing thread of his friendships (todd, cole, tal, sean) and free time., morgan, nate's girlfriend, is job-hunting and hoping to move to santa monica — exactly where nate lives — which points toward a near-term cohabitation step, yet nothing in the record shows nate actively supporting or planning around that move despite its bearing on their relationship., nate is running a full-time sales job (a brand-new west covina territory, ~140 facilities already visited across la county) while simultaneously building several software products with todd — mine, the interview agent, an app memo — and helping develop lisa's the college tour. that's a lot of parallel build-from-scratch efforts layered on top of a demanding day job., nate has accumulated bills he's waiting to clear with a first paycheck of only a couple thousand dollars, yet he owns about 18 surfboards and describes loving to buy more on facebook marketplace (plus a taste for yeti gear). the tight near-term finances sit in tension with an ongoing collector's spending habit., cole is one of nate's oldest best friends (known since eighth grade) and a trident ember defense co-founder, but the company is now paused and cole's whole family just relocated from palo alto to moss beach in norcal — putting real distance between nate and a core friendship that surfing and the business used to anchor., september 2023 was a hinge month: nate was cut from the usc volleyball team — ending a sport he'd been building toward since switching from baseball in eighth grade and walking on as starting setter — the very same week he met morgan, now his girlfriend and best friend. a loss and a foundational relationship landed together.
+  canonical_relationships  A= 20 B= 23 common=  7 drift=  6 rawSym= 29 GENUINE= 17
+      genuine onlyA: name is nate|co_founder_of|trident ember defense, cole richards|son_of|kara lee, kyle skinner|married_to|paloma, jacob tennant|brother_of|name is nate, kareem|manages|name is nate, justin keating|works_with|name is nate, andy smalley|friend_of|john pyzel
+      genuine onlyB: favorite surfboard is the pyzalian 1|shaped_by|john pyzel, sukah|family_dog_of|cole richards, karen|grandmother_of|morgan alexander peterson, todd gavin|co_founded|trident ember defense, cole richards|co_founded|trident ember defense, kyle skinner|child_of|jen skinner, linnea skinner|child_of|ron skinner, linnea skinner|child_of|jen skinner, bo skinner|child_of|paloma skinner, ollie skinner|child_of|paloma skinner
+
+== COVERAGE (every mapped raw claim cited by a current row) ==
+  D full#1: 141/154 = 91.6%
+  D full#2: 156/165 = 94.5%
+  C incr  : 147/153 = 96.1%
+
+== PERF + COST ==
+  full recompute (whole corpus)  : 579.8s, 14 calls, 59449+44598 tok
+  full mine (noise-floor arm 2)   : 707.1s, 14 calls, 67855+54502 tok
+  incremental baseline (4 caps): 465.8s, 12 calls, 47654+35819 tok
+  incremental FOLD (+2 caps)    : 147.8s, 9 calls, 28843+10388 tok
+  fold vs full: 3.9x faster, 64% of the API calls
+
+== VERDICT ==
+  raw label/edge symDiff (incl cosmetic drift)  : floor(D1vD2)=153  incremental(CvD)=154
+  GENUINE divergence (drift-paired, excl insights): floor=81  incremental=71
+  insights divergence (expected; incremental does NOT refresh global insights): 17
+  coverage not regressed         : true  (C 96.1% vs full 94.5%)
+  genuine divergence within floor: true  (incremental 71 vs floor*2+6 = 168)
+  fold under 300s & faster       : true  (147.8s)
+
+  RECOMMENDATION: PASS - incremental preserves the graph (coverage + genuine structure) and is far faster; safe to flip MINER_INCREMENTAL=1 after review. Cosmetic label drift and the insights gap are trued up by the periodic full rebuild; pair with MINER_STABLE_IDENTITY to minimize drift.
+
+  throwaway users (residue, no deletes): fullA=19afd3cc-ebd9-4478-8466-04fba5daf04f fullD=63486860-43ff-4eea-b13b-287fd907b6cb inc=1e334424-7a21-4bbf-b7b0-3677976e6a43
