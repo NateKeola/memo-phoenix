@@ -149,45 +149,54 @@ async function cloneCaptures(db: SupabaseClient, userId: string, caps: SrcCaptur
   return rows.length
 }
 
-type MineMetrics = { wallMs: number; tokensIn: number; tokensOut: number; llmCalls: number; passes: Record<string, unknown>[] }
+type MineMetrics = { wallMs: number; tokensIn: number; tokensOut: number; llmCalls: number; attempts: number; passes: Record<string, unknown>[] }
 
-// Spawn a child to run one mine with the given MINER_INCREMENTAL, measure wall-clock,
-// and parse the summary it prints (tokens + call counts).
-function mineOnce(userId: string, incremental: boolean, label: string): MineMetrics {
-  const self = fileURLToPath(import.meta.url)
-  console.log(`\n>>> MINE ${label}: user=${userId.slice(0, 8)} MINER_INCREMENTAL=${incremental ? '1' : '0'}`)
-  const t0 = Date.now()
-  const res = spawnSync('npx', ['tsx', self, '--mine', userId], {
+// A single mine spawn (one attempt).
+function spawnMine(self: string, userId: string, incremental: boolean) {
+  return spawnSync('npx', ['tsx', self, '--mine', userId], {
     encoding: 'utf8',
     env: { ...process.env, MEMO_USER_ID: userId, MINER_INCREMENTAL: incremental ? '1' : '0' },
     maxBuffer: 64 * 1024 * 1024,
   })
-  const wallMs = Date.now() - t0
-  if (res.status !== 0) {
-    console.error(res.stdout)
-    console.error(res.stderr)
-    throw new Error(`mine ${label} failed (exit ${res.status})`)
+}
+
+// Spawn a child to run one mine, measure wall-clock, parse the summary. A single
+// derivation pass can fail all its in-miner retries on transient LLM flakiness (a
+// hallucinated claim id, malformed JSON); mine() is idempotent and resumable (the
+// passes that already succeeded are memo-skipped), so we RETRY the whole mine. The
+// reported wall-clock is the final attempt's; a retried mine resumes, so its time is a
+// floor, not a clean full-mine time (clean first-try timings are flagged attempts=1).
+const MINE_ATTEMPTS = 3
+function mineOnce(userId: string, incremental: boolean, label: string): MineMetrics {
+  const self = fileURLToPath(import.meta.url)
+  console.log(`\n>>> MINE ${label}: user=${userId.slice(0, 8)} MINER_INCREMENTAL=${incremental ? '1' : '0'}`)
+  let lastErr = ''
+  for (let attempt = 1; attempt <= MINE_ATTEMPTS; attempt++) {
+    const t0 = Date.now()
+    const res = spawnMine(self, userId, incremental)
+    const wallMs = Date.now() - t0
+    const line = res.status === 0 ? (res.stdout || '').split('\n').find((l) => l.startsWith('HARNESS_SUMMARY ')) : undefined
+    if (res.status === 0 && line) {
+      const summary = JSON.parse(line.slice('HARNESS_SUMMARY '.length)) as {
+        extractUsage: { input_tokens: number; output_tokens: number }
+        extracted: number
+        passes: Array<{ table: string; batches: number; skipped: boolean; usage: { input_tokens: number; output_tokens: number }; rows: number; inserted: number; updated: number; unchanged: number }>
+      }
+      let tokensIn = summary.extractUsage.input_tokens
+      let tokensOut = summary.extractUsage.output_tokens
+      let llmCalls = summary.extracted
+      for (const p of summary.passes) {
+        tokensIn += p.usage.input_tokens
+        tokensOut += p.usage.output_tokens
+        llmCalls += p.batches
+      }
+      console.log(`    ${label} done in ${(wallMs / 1000).toFixed(1)}s (attempt ${attempt}); llmCalls=${llmCalls} tokensIn=${tokensIn} tokensOut=${tokensOut}`)
+      return { wallMs, tokensIn, tokensOut, llmCalls, attempts: attempt, passes: summary.passes as unknown as Record<string, unknown>[] }
+    }
+    lastErr = (res.stderr || res.stdout || '').split('\n').filter(Boolean).slice(-3).join(' | ')
+    console.log(`    attempt ${attempt}/${MINE_ATTEMPTS} failed (transient): ${lastErr.slice(0, 240)} -- retrying (mine resumes; completed passes are memo-skipped)`)
   }
-  const line = (res.stdout || '').split('\n').find((l) => l.startsWith('HARNESS_SUMMARY '))
-  if (!line) {
-    console.error(res.stdout)
-    throw new Error(`mine ${label}: no summary in output`)
-  }
-  const summary = JSON.parse(line.slice('HARNESS_SUMMARY '.length)) as {
-    extractUsage: { input_tokens: number; output_tokens: number }
-    extracted: number
-    passes: Array<{ table: string; batches: number; skipped: boolean; usage: { input_tokens: number; output_tokens: number }; rows: number; inserted: number; updated: number; unchanged: number }>
-  }
-  let tokensIn = summary.extractUsage.input_tokens
-  let tokensOut = summary.extractUsage.output_tokens
-  let llmCalls = summary.extracted // one extraction call per newly-extracted capture
-  for (const p of summary.passes) {
-    tokensIn += p.usage.input_tokens
-    tokensOut += p.usage.output_tokens
-    llmCalls += p.batches
-  }
-  console.log(`    ${label} done in ${(wallMs / 1000).toFixed(1)}s; llmCalls=${llmCalls} tokensIn=${tokensIn} tokensOut=${tokensOut}`)
-  return { wallMs, tokensIn, tokensOut, llmCalls, passes: summary.passes as unknown as Record<string, unknown>[] }
+  throw new Error(`mine ${label} failed after ${MINE_ATTEMPTS} attempts: ${lastErr.slice(0, 300)}`)
 }
 
 // ---- snapshot + structural diff ----
@@ -438,7 +447,7 @@ async function orchestrate(): Promise<void> {
   console.log(`  C incr  : ${snapC.coverage.covered}/${snapC.coverage.total} = ${(snapC.coverage.pct * 100).toFixed(1)}%`)
 
   console.log('\n== PERF + COST ==')
-  const s = (m: MineMetrics) => `${(m.wallMs / 1000).toFixed(1)}s, ${m.llmCalls} calls, ${m.tokensIn}+${m.tokensOut} tok`
+  const s = (m: MineMetrics) => `${(m.wallMs / 1000).toFixed(1)}s, ${m.llmCalls} calls, ${m.tokensIn}+${m.tokensOut} tok${m.attempts > 1 ? ` (retried x${m.attempts}; time is a resumed floor)` : ''}`
   console.log(`  full recompute (whole corpus)  : ${s(dFull1)}`)
   console.log(`  full mine (noise-floor arm 2)   : ${s(dFull2)}`)
   console.log(`  incremental baseline (${firstBatch.length} caps): ${s(cBaseline)}`)
