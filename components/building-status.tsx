@@ -88,52 +88,44 @@ export function BuildingStatus({ onboarding = false }: { onboarding?: boolean })
 
   if (run.status === 'done') {
     return (
-      <div style={{ display: 'grid', gap: 12, maxWidth: 460 }}>
-        <p style={{ color: 'green' }}>
+      <div className="mp-rise" style={{ display: 'grid', gap: 12, justifyItems: 'center' }}>
+        <p className="mp-ok" style={{ margin: 0 }}>
           {onboarding ? 'Your memory is ready. Taking you in...' : 'Your memory is ready.'}
         </p>
-        <p>
-          <Link href="/">Enter Memo &rarr;</Link>
-        </p>
+        <Link href="/" className="mp-btn mp-btn--primary">Enter Memo</Link>
       </div>
     )
   }
 
   if (run.status === 'error') {
     return (
-      <div style={{ display: 'grid', gap: 12, maxWidth: 460 }}>
-        <p style={{ color: 'crimson' }}>
+      <div style={{ display: 'grid', gap: 12, justifyItems: 'center' }}>
+        <p className="mp-bad" style={{ margin: 0 }}>
           {onboarding ? 'We hit a snag building your initial context.' : 'We hit a snag building your memory.'}
         </p>
-        {run.error ? <p style={{ color: '#888', fontSize: 13 }}>{run.error}</p> : null}
-        <div>
-          <button type="button" onClick={retry}>
-            Try again
-          </button>
-        </div>
-        <p>
-          <Link href="/">Go to the app anyway &rarr;</Link>
-        </p>
+        {run.error ? <p className="mp-meta" style={{ margin: 0 }}>{run.error}</p> : null}
+        <button type="button" className="mp-btn mp-btn--primary" onClick={retry}>
+          Try again
+        </button>
+        <Link href="/" className="mp-link" style={{ fontSize: 14 }}>Go to the app anyway &rarr;</Link>
       </div>
     )
   }
 
   // 'none' (starting) or 'running'
   return (
-    <div style={{ display: 'grid', gap: 12, maxWidth: 460 }}>
-      <p>
+    <div style={{ display: 'grid', gap: 12, justifyItems: 'center' }}>
+      <p className="mp-sub" style={{ margin: 0, textAlign: 'center', maxWidth: 360 }}>
         {onboarding
           ? 'Memo is building your initial context from your first conversation. This will only take a moment.'
           : 'Building your memory from your conversation. This can take a few minutes.'}
       </p>
       {onboarding ? null : (
-        <p style={{ color: '#888', fontSize: 13 }}>
+        <p className="mp-meta" style={{ margin: 0, textAlign: 'center' }}>
           You can leave this page; it keeps building. Come back any time to check.
         </p>
       )}
-      <p>
-        <Link href="/">Skip ahead to the app &rarr;</Link>
-      </p>
+      <Link href="/" className="mp-link" style={{ fontSize: 14 }}>Skip ahead to the app &rarr;</Link>
     </div>
   )
 }

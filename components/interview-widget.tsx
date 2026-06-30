@@ -1,6 +1,7 @@
 'use client'
 
-import Link from 'next/link'
+import { PageHeader } from '@/components/page-header'
+import { BrandSeed } from '@/components/brand-seed'
 import { ConversationProvider, useConversation } from '@elevenlabs/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -25,16 +26,17 @@ export function InterviewWidget() {
   useEffect(() => setMounted(true), [])
 
   return (
-    <main style={{ padding: 24, fontFamily: 'system-ui, sans-serif', maxWidth: 640 }}>
-      <p><Link href="/">&larr; Home</Link></p>
-      <h1>Interview</h1>
-      <p>A voice conversation with Memo. It captures itself and feeds the graph on the next miner run.</p>
+    <main className="mp-page mp-page--flush" style={{ maxWidth: 600 }}>
+      <PageHeader back="/" backLabel="Home" />
+      <p className="mp-eyebrow">Interview</p>
+      <h1 className="mp-h1" style={{ marginTop: 8 }}>A conversation with Memo</h1>
+      <p className="mp-sub">A voice conversation. It captures itself and feeds the graph on the next miner run.</p>
       {mounted ? (
         <ConversationProvider>
           <Interview />
         </ConversationProvider>
       ) : (
-        <p>Loading...</p>
+        <p className="mp-sub" style={{ marginTop: 16 }}>Loading...</p>
       )}
     </main>
   )
@@ -237,48 +239,53 @@ function Interview() {
     <div>
       {phase === 'choose' ? (
         target ? (
-          <div style={{ display: 'grid', gap: 12, maxWidth: 420 }}>
-            <p>
+          <div style={{ display: 'grid', gap: 12, maxWidth: 420, marginTop: 20 }}>
+            <p className="mp-sub" style={{ marginTop: 0 }}>
               {target.kind === 'person'
                 ? `An interview to add context about ${target.label ?? 'this person'}.`
                 : 'An interview to go deeper on what you were exploring.'}
             </p>
-            <button type="button" onClick={() => start('daily')}>Start interview</button>
+            <button type="button" className="mp-btn mp-btn--primary mp-btn--block" onClick={() => start('daily')}>Start interview</button>
           </div>
         ) : (
-          <div style={{ display: 'grid', gap: 12, maxWidth: 360 }}>
-            <button type="button" onClick={() => start('open')}>Open brain-dump</button>
-            <button type="button" onClick={() => start('daily')}>Daily check-in (graph-aware)</button>
+          <div style={{ display: 'grid', gap: 12, maxWidth: 380, marginTop: 20 }}>
+            <button type="button" className="mp-btn mp-btn--primary mp-btn--block" onClick={() => start('open')}>Open brain-dump</button>
+            <button type="button" className="mp-btn mp-btn--ghost mp-btn--block" onClick={() => start('daily')}>Daily check-in (graph-aware)</button>
           </div>
         )
       ) : null}
 
-      {phase === 'connecting' ? <p>Connecting{mode === 'daily' ? ' (composing your brief)' : ''}...</p> : null}
-
-      {phase === 'live' ? (
-        <div>
-          <p>Live ({mode}). {conversation.isSpeaking ? 'Memo is speaking...' : 'Listening...'}</p>
-          <button type="button" onClick={end}>End and save</button>
+      {phase === 'connecting' || phase === 'live' ? (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 18, marginTop: 28 }}>
+          <BrandSeed size={224} mark={88} />
+          <p className="mp-eyebrow mp-eyebrow--accent" style={{ letterSpacing: '0.22em' }}>
+            {phase === 'connecting'
+              ? mode === 'daily' ? 'Composing your brief...' : 'Connecting...'
+              : conversation.isSpeaking ? 'Memo is speaking...' : 'Listening...'}
+          </p>
+          {phase === 'live' ? (
+            <button type="button" className="mp-btn mp-btn--ghost" onClick={end}>End and save</button>
+          ) : null}
         </div>
       ) : null}
 
-      {phase === 'saving' ? <p>Saving the transcript...</p> : null}
+      {phase === 'saving' ? <p className="mp-sub" style={{ marginTop: 20 }}>Saving the transcript...</p> : null}
 
       {phase === 'done' && result ? (
-        <p style={{ color: 'green' }}>
+        <p className="mp-ok mp-rise" style={{ marginTop: 20 }}>
           {result.captured
             ? `Captured (${result.length} chars). Run the miner to fold it into your graph.`
             : 'Ended. The conversation was too short to capture.'}
         </p>
       ) : null}
 
-      {error ? <p style={{ color: 'crimson' }}>{error}</p> : null}
+      {error ? <p className="mp-bad mp-rise" style={{ marginTop: 16 }}>{error}</p> : null}
 
       {lines.length > 0 ? (
-        <div style={{ marginTop: 16, maxHeight: 320, overflowY: 'auto', background: '#f5f5f5', padding: 12 }}>
+        <div className="mp-card mp-card--recessed" style={{ marginTop: 18, maxHeight: 320, overflowY: 'auto' }}>
           {lines.map((l, i) => (
-            <p key={i} style={{ margin: '4px 0' }}>
-              <strong>{l.role}:</strong> {l.text}
+            <p key={i} style={{ margin: '6px 0', lineHeight: 1.45 }}>
+              <strong style={{ color: 'var(--accent)', fontWeight: 500 }}>{l.role}:</strong> {l.text}
             </p>
           ))}
         </div>

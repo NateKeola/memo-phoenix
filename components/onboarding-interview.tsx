@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation'
 import { ConversationProvider, useConversation } from '@elevenlabs/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { BrandSeed } from '@/components/brand-seed'
 import {
   DebugReadout,
   describeDisconnect,
@@ -29,7 +30,7 @@ type Line = { role: string; text: string }
 export function OnboardingInterview() {
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
-  if (!mounted) return <p>Loading...</p>
+  if (!mounted) return <p className="mp-sub">Loading...</p>
   return (
     <ConversationProvider>
       <Inner />
@@ -300,62 +301,70 @@ function Inner() {
   return (
     <div>
       {phase === 'intro' ? (
-        <div style={{ display: 'grid', gap: 12, maxWidth: 460 }}>
-          <p>
+        <div style={{ display: 'grid', gap: 14, maxWidth: 460, marginTop: 6 }}>
+          <p className="mp-sub" style={{ marginTop: 0 }}>
             When you are ready, start the conversation. Aim for about ten minutes (enough for Memo to
             get a good first picture); there are no wrong answers. Memo will gently steer toward a
             warm goodbye around then, or you can press <em>Ready to end the interview?</em> whenever
             you feel done, and it will build your memory.
           </p>
-          <button type="button" onClick={start}>
+          <button type="button" className="mp-btn mp-btn--primary mp-btn--block" onClick={start}>
             Start the conversation
           </button>
         </div>
       ) : null}
 
-      {phase === 'connecting' ? <p>Connecting...</p> : null}
-
-      {phase === 'live' ? (
-        <div>
-          <p>Live. {conversation.isSpeaking ? 'Memo is speaking...' : 'Listening...'}</p>
-          <p style={{ color: '#888', fontSize: 13 }}>Memo will gently wrap up around ten minutes, or end whenever you are ready.</p>
-          <button type="button" onClick={beginClose}>
-            Ready to end the interview?
-          </button>
-        </div>
-      ) : null}
-
-      {phase === 'closing' ? (
-        <div style={{ display: 'grid', gap: 8, maxWidth: 460 }}>
-          <p>Memo is wrapping up{conversation.isSpeaking ? ' and saying goodbye...' : '...'}</p>
-          <p style={{ color: '#888', fontSize: 13 }}>
-            It will finish its goodbye and then start building your memory. You can end now if you
-            prefer.
+      {phase === 'connecting' || phase === 'live' || phase === 'closing' ? (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, marginTop: 24 }}>
+          <BrandSeed size={208} mark={80} />
+          <p className="mp-eyebrow mp-eyebrow--accent" style={{ letterSpacing: '0.22em' }}>
+            {phase === 'connecting'
+              ? 'Connecting...'
+              : phase === 'closing'
+                ? conversation.isSpeaking ? 'Saying goodbye...' : 'Wrapping up...'
+                : conversation.isSpeaking ? 'Memo is speaking...' : 'Listening...'}
           </p>
-          <div>
-            <button type="button" onClick={() => void finalizeEnd()}>
-              End now
-            </button>
-          </div>
+
+          {phase === 'live' ? (
+            <>
+              <button type="button" className="mp-btn mp-btn--ghost" onClick={beginClose}>
+                Ready to end the interview?
+              </button>
+              <p className="mp-meta" style={{ textAlign: 'center', maxWidth: 320 }}>
+                Memo will gently wrap up around ten minutes, or end whenever you are ready.
+              </p>
+            </>
+          ) : null}
+
+          {phase === 'closing' ? (
+            <>
+              <button type="button" className="mp-btn mp-btn--ghost" onClick={() => void finalizeEnd()}>
+                End now
+              </button>
+              <p className="mp-meta" style={{ textAlign: 'center', maxWidth: 340 }}>
+                It will finish its goodbye and then start building your memory. You can end now if you prefer.
+              </p>
+            </>
+          ) : null}
         </div>
       ) : null}
 
-      {phase === 'saving' ? <p>Saving your conversation...</p> : null}
+      {phase === 'saving' ? <p className="mp-sub" style={{ marginTop: 20 }}>Saving your conversation...</p> : null}
 
       {phase === 'error' ? (
-        <div style={{ display: 'grid', gap: 8, maxWidth: 460 }}>
-          <p style={{ color: 'crimson' }}>{error}</p>
-          <button type="button" onClick={() => setPhase('intro')}>
+        <div style={{ display: 'grid', gap: 10, maxWidth: 460, marginTop: 8 }}>
+          <p className="mp-bad" style={{ margin: 0 }}>{error}</p>
+          <button type="button" className="mp-btn mp-btn--ghost" style={{ justifySelf: 'start' }} onClick={() => setPhase('intro')}>
             Try again
           </button>
         </div>
       ) : null}
 
       {lines.length > 0 ? (
-        <div style={{ marginTop: 16, maxHeight: 320, overflowY: 'auto', background: '#f5f5f5', padding: 12 }}>
+        <div className="mp-card mp-card--recessed" style={{ marginTop: 18, maxHeight: 320, overflowY: 'auto' }}>
           {lines.map((l, i) => (
-            <p key={i} style={{ margin: '4px 0' }}>
-              <strong>{l.role}:</strong> {l.text}
+            <p key={i} style={{ margin: '6px 0', lineHeight: 1.45 }}>
+              <strong style={{ color: 'var(--accent)', fontWeight: 500 }}>{l.role}:</strong> {l.text}
             </p>
           ))}
         </div>

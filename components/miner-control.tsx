@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import type { MinerState, LedgerRun } from '@/lib/miner/state'
+import { BrandSeed } from '@/components/brand-seed'
 
 const TRIGGER_LABEL: Record<string, string> = {
   manual: 'manual',
@@ -84,67 +85,69 @@ export function MinerControl() {
     return () => clearInterval(id)
   }, [state?.active, fetchState])
 
-  if (!state) return <p>Loading...</p>
+  if (!state) return <p className="mp-sub">Loading...</p>
 
   const pct = Math.min(100, Math.round((state.newCaptures / Math.max(1, state.threshold)) * 100))
   const active = state.active
 
   return (
-    <div style={{ display: 'grid', gap: 20, maxWidth: 620 }}>
+    <div style={{ display: 'grid', gap: 22, marginTop: 18 }}>
       {/* current status + run now */}
-      <section>
-        {active ? (
-          <div style={{ background: '#fdf6e3', padding: 12, borderRadius: 8 }}>
-            <p style={{ margin: 0 }}>
-              <strong>Updating your memory...</strong> (started {relative(active.started_at)},{' '}
-              {TRIGGER_LABEL[active.trigger] ?? active.trigger})
-            </p>
-            <p style={{ margin: '6px 0 0', color: '#888', fontSize: 13 }}>
-              A full update can take a few minutes. This page updates as it runs.
-            </p>
+      <section className="mp-card">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <BrandSeed size={56} mark={22} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {active ? (
+              <>
+                <div className="mp-row__title" style={{ fontSize: 17 }}>Updating your memory...</div>
+                <div className="mp-meta" style={{ marginTop: 4 }}>
+                  started {relative(active.started_at)}, {TRIGGER_LABEL[active.trigger] ?? active.trigger}
+                </div>
+              </>
+            ) : (
+              <div className="mp-row__title" style={{ fontSize: 17 }}>
+                {state.ledger[0]
+                  ? `Last updated ${relative(state.ledger[0].started_at)}.`
+                  : 'Your memory has not been built yet.'}
+              </div>
+            )}
           </div>
-        ) : (
-          <p style={{ margin: 0 }}>
-            {state.ledger[0]
-              ? `Last updated ${relative(state.ledger[0].started_at)}.`
-              : 'Your memory has not been built yet.'}
-          </p>
-        )}
-        <div style={{ marginTop: 10 }}>
-          <button type="button" onClick={() => run('manual')} disabled={busy || Boolean(active)}>
-            {active ? 'Running...' : 'Run now'}
-          </button>
         </div>
-        {note ? <p style={{ marginTop: 8, color: '#555', fontSize: 14 }}>{note}</p> : null}
+        <button
+          type="button"
+          className="mp-btn mp-btn--primary mp-btn--block"
+          style={{ marginTop: 16 }}
+          onClick={() => run('manual')}
+          disabled={busy || Boolean(active)}
+        >
+          {active ? 'Running...' : 'Run now'}
+        </button>
+        {active ? (
+          <p className="mp-meta" style={{ marginTop: 10 }}>A full update can take a few minutes. This page updates as it runs.</p>
+        ) : null}
+        {note ? <p className="mp-meta" style={{ marginTop: 10 }}>{note}</p> : null}
       </section>
 
       {/* progress toward the next daily auto-mine */}
       <section>
-        <p style={{ margin: '0 0 6px', fontSize: 14 }}>
+        <p className="mp-sub" style={{ margin: '0 0 8px', fontSize: 14 }}>
           {state.newCaptures} new {state.newCaptures === 1 ? 'note' : 'notes'} since the last update. Memo
           updates once a day when there are at least {state.threshold}, or run it now.
         </p>
-        <div style={{ background: '#eee', borderRadius: 6, height: 12, overflow: 'hidden' }}>
-          <div
-            style={{
-              width: `${pct}%`,
-              height: '100%',
-              background: state.shouldAutoRun ? '#b8860b' : '#cbb26a',
-              transition: 'width 200ms',
-            }}
-          />
+        <div className="mp-progress">
+          <div className={`mp-progress__fill${state.shouldAutoRun ? ' mp-progress__fill--ready' : ''}`} style={{ width: `${pct}%` }} />
         </div>
       </section>
 
       {/* run ledger */}
       <section>
-        <h2 style={{ fontSize: 16, margin: '0 0 8px' }}>Recent runs</h2>
+        <p className="mp-eyebrow">Recent runs</p>
         {state.ledger.length === 0 ? (
-          <p style={{ color: '#888' }}>No runs yet.</p>
+          <p className="mp-meta" style={{ marginTop: 10 }}>No runs yet.</p>
         ) : (
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 8 }}>
+          <ul className="mp-list" style={{ marginTop: 6 }}>
             {state.ledger.map((r) => (
-              <li key={r.id} style={{ borderBottom: '1px solid #eee', paddingBottom: 8 }}>
+              <li key={r.id} className="mp-row">
                 <LedgerLine run={r} />
               </li>
             ))}
@@ -164,12 +167,12 @@ function LedgerLine({ run }: { run: LedgerRun }) {
   })
   const trigger = TRIGGER_LABEL[run.trigger] ?? run.trigger
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 14 }}>
-      <span>
-        <span style={{ color: '#888' }}>{when}</span>{' '}
-        <span style={{ fontSize: 12, background: '#f0ead6', padding: '1px 6px', borderRadius: 10 }}>{trigger}</span>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', width: '100%' }}>
+      <span style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span style={{ fontSize: 16, color: 'var(--txt)' }}>{when}</span>
+        <span style={{ alignSelf: 'flex-start', fontSize: 11, letterSpacing: '0.06em', background: 'var(--surf-2)', color: 'var(--txt-faint)', padding: '4px 8px', borderRadius: 6 }}>{trigger}</span>
       </span>
-      <span style={{ textAlign: 'right', color: statusColor(run.status) }}>
+      <span style={{ textAlign: 'right', fontSize: 14, color: statusColor(run.status) }}>
         {run.status === 'running' ? 'in progress' : null}
         {run.status === 'error' ? `failed${run.error ? `: ${run.error.slice(0, 80)}` : ''}` : null}
         {run.status === 'done'
@@ -183,7 +186,7 @@ function LedgerLine({ run }: { run: LedgerRun }) {
 }
 
 function statusColor(s: string): string {
-  if (s === 'done') return '#2e7d32'
-  if (s === 'error') return 'crimson'
-  return '#b8860b'
+  if (s === 'done') return 'var(--ok)'
+  if (s === 'error') return 'var(--record-soft)'
+  return 'var(--accent-deep)'
 }

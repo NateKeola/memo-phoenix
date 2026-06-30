@@ -4,6 +4,7 @@ import { requireAllowedUser } from '@/lib/auth/guard'
 import { duplicateCandidates, getPersonDetail, listPeople, type RetrievalDeps } from '@/lib/people'
 import { PersonCorrections } from '@/components/person-corrections'
 import { ContextAdder } from '@/components/context-adder'
+import { PageHeader } from '@/components/page-header'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,44 +35,60 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
   const role = field(person.data, 'role')
   const closeness = field(person.data, 'closeness')
   const workOrPersonal = field(person.data, 'work_or_personal')
+  const tags = [role, closeness, workOrPersonal].filter(Boolean) as string[]
+  const initial = (person.name ?? '?').trim().charAt(0).toUpperCase() || '?'
 
   return (
-    <main style={{ padding: 24, fontFamily: 'system-ui, sans-serif', maxWidth: 720 }}>
-      <p>
-        <Link href="/people">&larr; People</Link>
-      </p>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-        <h1 style={{ margin: 0 }}>{person.name ?? '(unnamed)'}</h1>
-        <ContextAdder targetKind="person" targetId={person.id} label={person.name ?? 'this person'} source="person_detail" showInterview />
-      </div>
+    <main className="mp-page mp-page--flush">
+      <PageHeader back="/people" backLabel="People" />
+
+      <header style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <span className="mp-avatar mp-avatar--lg" aria-hidden>{initial}</span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <h1 className="mp-h2" style={{ margin: 0 }}>{person.name ?? '(unnamed)'}</h1>
+            <ContextAdder targetKind="person" targetId={person.id} label={person.name ?? 'this person'} source="person_detail" showInterview />
+          </div>
+          {relationship ? (
+            <div style={{ marginTop: 5, fontStyle: 'italic', color: 'var(--accent)', fontSize: 16 }}>{relationship}</div>
+          ) : null}
+        </div>
+      </header>
+
       {person.pendingRename ? (
-        <p style={{ color: '#b07a14', fontSize: 13, marginTop: 0 }}>This rename takes effect on the next miner run.</p>
+        <p className="mp-meta" style={{ color: 'var(--accent-deep)', marginTop: 12 }}>This rename takes effect on the next miner run.</p>
       ) : null}
-      <div style={{ color: '#555', marginBottom: 12 }}>
-        {[relationship, role, closeness, workOrPersonal].filter(Boolean).join(' / ') || 'No tags yet'}
+
+      <div style={{ marginTop: 14, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+        {tags.length > 0 ? (
+          tags.map((t) => <span key={t} className={`mp-tag${t === 'work' ? ' mp-tag--accent' : ''}`}>{t}</span>)
+        ) : (
+          !relationship ? <span className="mp-meta">No tags yet</span> : null
+        )}
       </div>
-      {aliases.length > 0 ? <p style={{ fontSize: 13, color: '#999' }}>Also known as: {aliases.join(', ')}</p> : null}
-      {person.summary ? <p>{person.summary}</p> : null}
+
+      {aliases.length > 0 ? <p className="mp-meta" style={{ marginTop: 12 }}>Also known as: {aliases.join(', ')}</p> : null}
+      {person.summary ? <p className="mp-sub" style={{ marginTop: 12 }}>{person.summary}</p> : null}
 
       {person.provenance.length > 0 ? (
-        <p style={{ fontSize: 13, color: '#777' }}>
+        <p className="mp-meta" style={{ marginTop: 12 }}>
           First mentioned in your {person.provenance[0].mode}
           {person.provenance[0].date ? ` on ${person.provenance[0].date}` : ''}
           {person.provenance.length > 1 ? ` (and ${person.provenance.length - 1} more)` : ''}.
         </p>
       ) : null}
 
-      <section style={{ marginTop: 16 }}>
-        <h2 style={{ fontSize: 18 }}>Relationships</h2>
+      <section style={{ marginTop: 26 }}>
+        <p className="mp-eyebrow">Relationships</p>
         {person.relationships.length === 0 ? (
-          <p style={{ color: '#999' }}>None recorded.</p>
+          <p className="mp-meta" style={{ marginTop: 10 }}>None recorded.</p>
         ) : (
-          <ul style={{ display: 'grid', gap: 4, paddingLeft: 18 }}>
+          <ul className="mp-list" style={{ marginTop: 10, display: 'grid', gap: 8 }}>
             {person.relationships.map((e, i) => (
-              <li key={i}>
+              <li key={i} className="mp-row__title" style={{ fontSize: 16 }}>
                 {e.summary ?? `${e.relation ?? 'related to'} ${e.other.label ?? e.other.id}`}
                 {e.other.label && e.other.type === 'person' ? (
-                  <Link href={`/people/${e.other.id}`} style={{ marginLeft: 6, fontSize: 12 }}>
+                  <Link href={`/people/${e.other.id}`} className="mp-link" style={{ marginLeft: 6, fontSize: 13 }}>
                     view
                   </Link>
                 ) : null}
@@ -81,16 +98,16 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
         )}
       </section>
 
-      <section style={{ marginTop: 16 }}>
-        <h2 style={{ fontSize: 18 }}>Commitments</h2>
+      <section style={{ marginTop: 22 }}>
+        <p className="mp-eyebrow">Commitments</p>
         {person.commitments.length === 0 ? (
-          <p style={{ color: '#999' }}>None recorded.</p>
+          <p className="mp-meta" style={{ marginTop: 10 }}>None recorded.</p>
         ) : (
-          <ul style={{ display: 'grid', gap: 4, paddingLeft: 18 }}>
+          <ul className="mp-list" style={{ marginTop: 10, display: 'grid', gap: 8 }}>
             {person.commitments.map((c) => (
-              <li key={c.id}>
+              <li key={c.id} className="mp-row__title" style={{ fontSize: 16 }}>
                 {c.label}
-                {c.due ? <span style={{ color: '#777' }}> (due {String(c.due)})</span> : null}
+                {c.due ? <span style={{ color: 'var(--txt-faint)' }}> (due {String(c.due)})</span> : null}
               </li>
             ))}
           </ul>

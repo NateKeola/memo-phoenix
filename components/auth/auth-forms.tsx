@@ -18,11 +18,14 @@ export function AuthForms({ error, mode: initialMode }: { error?: string; mode?:
       type="button"
       onClick={() => setMode(m)}
       style={{
-        padding: '6px 12px',
+        padding: '8px 4px',
         border: 'none',
-        borderBottom: mode === m ? '2px solid #b8860b' : '2px solid transparent',
+        borderBottom: mode === m ? '2px solid var(--accent)' : '2px solid transparent',
         background: 'none',
-        fontWeight: mode === m ? 600 : 400,
+        color: mode === m ? 'var(--txt)' : 'var(--txt-faint)',
+        fontFamily: 'inherit',
+        fontSize: 15,
+        fontWeight: mode === m ? 500 : 400,
         cursor: 'pointer',
       }}
     >
@@ -31,38 +34,37 @@ export function AuthForms({ error, mode: initialMode }: { error?: string; mode?:
   )
 
   return (
-    <div style={{ maxWidth: 420 }}>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, borderBottom: '1px solid #e5e5e5' }}>
+    <div>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 18, borderBottom: '1px solid var(--line)' }}>
         {tab('signin', 'Sign in')}
         {tab('create', 'Create account')}
       </div>
 
-      {error ? <p style={{ color: 'crimson' }}>{error}</p> : null}
+      {error ? <p className="mp-bad mp-rise" style={{ marginTop: 0 }}>{error}</p> : null}
 
       {mode === 'signin' ? (
         <section>
-          <p style={{ color: '#666', fontSize: 14, margin: '0 0 8px' }}>
-            Sign in with your email and password.
-          </p>
-          <form action={login} style={{ display: 'grid', gap: 8 }}>
-            <input name="email" type="email" placeholder="email" autoComplete="email" required />
+          <p className="mp-meta" style={{ margin: '0 0 12px' }}>Sign in with your email and password.</p>
+          <form action={login} style={{ display: 'grid', gap: 10 }}>
+            <input name="email" type="email" placeholder="email" autoComplete="email" required className="mp-input" />
             <input
               name="password"
               type="password"
               placeholder="password"
               autoComplete="current-password"
               required
+              className="mp-input"
             />
-            <button type="submit">Sign in</button>
+            <button type="submit" className="mp-btn mp-btn--primary mp-btn--block">Sign in</button>
           </form>
         </section>
       ) : (
         <section>
-          <p style={{ color: '#666', fontSize: 14, margin: '0 0 8px' }}>
+          <p className="mp-meta" style={{ margin: '0 0 12px' }}>
             Invited? Enter your invited email and choose a password. Access is invite-only.
           </p>
-          <form action={createAccount} style={{ display: 'grid', gap: 8 }}>
-            <input name="email" type="email" placeholder="your invited email" autoComplete="email" required />
+          <form action={createAccount} style={{ display: 'grid', gap: 10 }}>
+            <input name="email" type="email" placeholder="your invited email" autoComplete="email" required className="mp-input" />
             <input
               name="password"
               type="password"
@@ -71,23 +73,24 @@ export function AuthForms({ error, mode: initialMode }: { error?: string; mode?:
               value={pw}
               onChange={(e) => setPw(e.target.value)}
               required
+              className="mp-input"
             />
-            <ul style={{ listStyle: 'none', padding: 0, margin: '4px 0', fontSize: 13 }}>
+            <ul style={{ listStyle: 'none', padding: 0, margin: '2px 0', fontSize: 13, display: 'grid', gap: 4 }}>
               {PASSWORD_CHECKS.map((c) => {
                 const ok = c.test(pw)
                 return (
-                  <li key={c.id} style={{ color: ok ? 'green' : '#999' }}>
+                  <li key={c.id} style={{ color: ok ? 'var(--ok)' : 'var(--txt-faint)' }}>
                     {ok ? '✓' : '○'} {c.label}
                   </li>
                 )
               })}
             </ul>
-            <button type="submit">Create account</button>
+            <button type="submit" className="mp-btn mp-btn--primary mp-btn--block">Create account</button>
           </form>
         </section>
       )}
 
-      <p style={{ color: '#999', fontSize: 12, marginTop: 24 }}>
+      <p className="mp-meta" style={{ marginTop: 24 }}>
         Apple and Google sign-in are coming later. Forgot your password? Contact your admin.
       </p>
     </div>

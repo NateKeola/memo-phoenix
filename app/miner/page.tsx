@@ -1,6 +1,7 @@
-import Link from 'next/link'
 import { requireAllowedUser } from '@/lib/auth/guard'
 import { MinerControl } from '@/components/miner-control'
+import { PageHeader } from '@/components/page-header'
+import { BottomNav } from '@/components/bottom-nav'
 
 export const dynamic = 'force-dynamic'
 
@@ -11,13 +12,14 @@ export default async function MinerPage() {
   await requireAllowedUser()
 
   return (
-    <main style={{ padding: 24, fontFamily: 'system-ui, sans-serif', maxWidth: 680 }}>
-      <p>
-        <Link href="/">&larr; Home</Link>
+    <main className="mp-page">
+      <PageHeader back="/" backLabel="Home" />
+      <h1 className="mp-h1">Memory</h1>
+      <p className="mp-sub">
+        Built by mining everything you have captured. Run it now, watch it work, and see what changed.
       </p>
-      <h1>Memory</h1>
-      <p>Memo builds your memory by mining everything you have captured. Run it now, watch it work, and see what changed.</p>
       <MinerControl />
+      <BottomNav />
     </main>
   )
 }

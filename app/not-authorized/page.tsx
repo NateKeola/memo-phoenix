@@ -17,15 +17,17 @@ export default async function NotAuthorizedPage() {
   if (await isAllowed(user)) redirect('/')
 
   return (
-    <main style={{ padding: 24, fontFamily: 'system-ui, sans-serif', maxWidth: 480 }}>
-      <h1>Not authorized</h1>
-      <p>
-        Your account ({user.email}) is not authorized to use this app. If you think this is a
-        mistake, contact your admin to be added to the allowlist.
-      </p>
-      <form action="/auth/signout" method="post" style={{ marginTop: 16 }}>
-        <button type="submit">Sign out</button>
-      </form>
+    <main className="mp-stage">
+      <div style={{ textAlign: 'center' }}>
+        <h1 className="mp-h2">Not authorized</h1>
+        <p className="mp-sub" style={{ marginTop: 10 }}>
+          Your account ({user.email}) is not authorized to use this app. If you think this is a
+          mistake, contact your admin to be added to the allowlist.
+        </p>
+        <form action="/auth/signout" method="post" style={{ marginTop: 22 }}>
+          <button type="submit" className="mp-btn mp-btn--ghost">Sign out</button>
+        </form>
+      </div>
     </main>
   )
 }

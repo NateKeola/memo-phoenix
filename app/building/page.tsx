@@ -1,5 +1,6 @@
 import { requireAllowedUser } from '@/lib/auth/guard'
 import { BuildingStatus } from '@/components/building-status'
+import { BrandSeed } from '@/components/brand-seed'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,9 +19,17 @@ export default async function BuildingPage({
   const onboarding = from === 'onboarding'
 
   return (
-    <main style={{ padding: 24, fontFamily: 'system-ui, sans-serif', maxWidth: 640 }}>
-      <h1>{onboarding ? 'Building your initial context' : 'Building your memory'}</h1>
-      <BuildingStatus onboarding={onboarding} />
+    <main className="mp-stage">
+      <div style={{ display: 'grid', gap: 18, justifyItems: 'center', textAlign: 'center' }}>
+        <BrandSeed size={188} mark={66} />
+        <div>
+          <p className="mp-eyebrow mp-eyebrow--accent">{onboarding ? 'Welcome' : 'Mining'}</p>
+          <h1 className="mp-h2" style={{ marginTop: 8 }}>
+            {onboarding ? 'Building your initial context' : 'Building your memory'}
+          </h1>
+        </div>
+        <BuildingStatus onboarding={onboarding} />
+      </div>
     </main>
   )
 }

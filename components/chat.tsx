@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useRef, useState } from 'react'
+import { IconSend } from '@/components/icons'
 
 type Msg = { role: 'user' | 'assistant'; content: string }
 
@@ -80,36 +81,33 @@ export function Chat() {
   }
 
   return (
-    <div style={{ display: 'grid', gap: 12 }}>
+    <div style={{ display: 'grid', gap: 14, marginTop: 18 }}>
       <div
         ref={scrollRef}
-        style={{
-          minHeight: 200,
-          maxHeight: 460,
-          overflowY: 'auto',
-          border: '1px solid #ddd',
-          borderRadius: 8,
-          padding: 12,
-          background: '#fafafa',
-        }}
+        className="mp-card mp-card--recessed mp-thread"
+        style={{ minHeight: 220, maxHeight: 460 }}
       >
         {messages.length === 0 ? (
-          <p style={{ color: '#888', margin: 0 }}>No messages yet. Ask a question below.</p>
+          <p className="mp-meta" style={{ margin: 0 }}>No messages yet. Ask a question below.</p>
         ) : (
-          messages.map((m, i) => (
-            <div key={i} style={{ margin: '8px 0' }}>
-              <strong style={{ color: m.role === 'user' ? '#1a1a1a' : '#0a6' }}>
-                {m.role === 'user' ? 'You' : 'Memo'}:
-              </strong>{' '}
-              <span style={{ whiteSpace: 'pre-wrap' }}>
-                {m.content || (busy && i === messages.length - 1 ? 'thinking...' : '')}
-              </span>
-            </div>
-          ))
+          messages.map((m, i) =>
+            m.role === 'user' ? (
+              <div key={i} className="mp-bubble-me">
+                <span style={{ whiteSpace: 'pre-wrap' }}>{m.content}</span>
+              </div>
+            ) : (
+              <div key={i} className="mp-bubble-agent">
+                <span className="mp-mark" style={{ width: 28, height: 28, marginTop: 2 }} aria-hidden />
+                <p style={{ whiteSpace: 'pre-wrap' }}>
+                  {m.content || (busy && i === messages.length - 1 ? 'thinking...' : '')}
+                </p>
+              </div>
+            )
+          )
         )}
       </div>
 
-      {error ? <p style={{ color: 'crimson', margin: 0 }}>{error}</p> : null}
+      {error ? <p className="mp-bad" style={{ margin: 0 }}>{error}</p> : null}
 
       {(() => {
         // After an answer, the user can go deeper in a voice interview seeded with
@@ -121,7 +119,7 @@ export function Chat() {
           const href = `/capture/interview?${new URLSearchParams({ target: 'topic', seed: lastUser.slice(0, 400) }).toString()}`
           return (
             <p style={{ margin: 0 }}>
-              <Link href={href} style={{ color: '#b07a14', fontSize: 14 }}>
+              <Link href={href} className="mp-link" style={{ fontSize: 14 }}>
                 Talk more about this in an interview &rarr;
               </Link>
             </p>
@@ -130,17 +128,25 @@ export function Chat() {
         return null
       })()}
 
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder="Ask about your corpus..."
           rows={2}
-          style={{ flex: 1, padding: 8, fontFamily: 'inherit', fontSize: 14, resize: 'vertical' }}
+          className="mp-textarea"
+          style={{ flex: 1, minHeight: 52 }}
         />
-        <button type="button" onClick={() => void send()} disabled={busy || !input.trim()} style={{ padding: '0 16px' }}>
-          {busy ? '...' : 'Send'}
+        <button
+          type="button"
+          onClick={() => void send()}
+          disabled={busy || !input.trim()}
+          aria-label="Send"
+          className="mp-btn mp-btn--primary"
+          style={{ width: 52, height: 52, padding: 0, borderRadius: '50%', flex: 'none' }}
+        >
+          <IconSend />
         </button>
       </div>
     </div>
