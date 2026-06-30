@@ -7,6 +7,9 @@
 
 export { mine, mineWithLock, assertUserId, type MineSummary, type MineRunResult } from './run'
 export { runDerivation } from './derive'
+// Incremental derivation (MINER_INCREMENTAL, default OFF). mergeEmitted is the pure
+// merge used by the deterministic equivalence check.
+export { INCREMENTAL, runIncrementalDerivation, mergeEmitted, type IncrementalMode } from './incremental'
 // Stable-identity resolution (deterministic-id hardening). The pure helpers are
 // exported for the offline resolution check; the DB-backed Resolver wiring runs
 // inside the miner.
