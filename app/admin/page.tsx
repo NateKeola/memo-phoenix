@@ -1,8 +1,8 @@
-import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { isOperator } from '@/lib/auth/operator'
 import { InviteForm } from '@/components/admin/invite-form'
+import { PageHeader } from '@/components/page-header'
 import { revokeInviteAction } from './actions'
 import type { Invite } from '@/lib/invites'
 
@@ -27,44 +27,32 @@ export default async function AdminPage() {
   const invites = (data ?? []) as Invite[]
 
   return (
-    <main style={{ padding: 24, fontFamily: 'system-ui, sans-serif', maxWidth: 640 }}>
-      <p>
-        <Link href="/">&larr; Home</Link>
-      </p>
-      <h1>Invites</h1>
-      <p>
+    <main className="mp-page mp-page--flush" style={{ maxWidth: 600 }}>
+      <PageHeader back="/" backLabel="Home" />
+      <h1 className="mp-h1">Invites</h1>
+      <p className="mp-sub">
         Add a person to the allowlist by email. They then create their own account at the sign-in
         page with that email and a password. Only allowlisted addresses can register.
       </p>
 
       <InviteForm />
 
-      <h2 style={{ fontSize: 18, marginTop: 24 }}>Invited</h2>
+      <p className="mp-eyebrow" style={{ marginTop: 24 }}>Invited</p>
       {invites.length === 0 ? (
-        <p>No invites yet.</p>
+        <p className="mp-meta" style={{ marginTop: 10 }}>No invites yet.</p>
       ) : (
-        <ul style={{ listStyle: 'none', padding: 0, display: 'grid', gap: 8 }}>
+        <ul className="mp-list" style={{ marginTop: 8 }}>
           {invites.map((inv) => (
-            <li
-              key={inv.id}
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: 12,
-                borderBottom: '1px solid #eee',
-                paddingBottom: 8,
-              }}
-            >
-              <span>
-                <strong>{inv.email}</strong>{' '}
-                <span style={{ color: statusColor(inv.status), fontSize: 13 }}>({inv.status})</span>
-                {inv.note ? <span style={{ color: '#888', fontSize: 13 }}> — {inv.note}</span> : null}
+            <li key={inv.id} className="mp-row" style={{ justifyContent: 'space-between' }}>
+              <span style={{ minWidth: 0 }}>
+                <span style={{ color: 'var(--txt)' }}>{inv.email}</span>{' '}
+                <span className={`mp-tag ${statusTag(inv.status)}`} style={{ marginLeft: 4 }}>{inv.status}</span>
+                {inv.note ? <span className="mp-meta" style={{ display: 'block', marginTop: 4 }}>{inv.note}</span> : null}
               </span>
               {inv.status !== 'revoked' ? (
                 <form action={revokeInviteAction}>
                   <input type="hidden" name="id" value={inv.id} />
-                  <button type="submit" style={{ fontSize: 13 }}>
+                  <button type="submit" className="mp-btn mp-btn--ghost" style={{ padding: '7px 13px', fontSize: 13 }}>
                     {inv.status === 'accepted' ? 'Remove' : 'Revoke'}
                   </button>
                 </form>
@@ -77,8 +65,8 @@ export default async function AdminPage() {
   )
 }
 
-function statusColor(s: string): string {
-  if (s === 'accepted') return 'green'
-  if (s === 'revoked') return '#999'
-  return '#b8860b'
+function statusTag(s: string): string {
+  if (s === 'accepted') return 'mp-tag--ok'
+  if (s === 'revoked') return ''
+  return 'mp-tag--accent'
 }

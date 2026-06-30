@@ -1,8 +1,9 @@
-import Link from 'next/link'
 import { requireAllowedUser } from '@/lib/auth/guard'
 import { getToday } from '@/lib/companion/today'
 import { logEvent } from '@/lib/telemetry'
 import { CompanionView } from '@/components/companion/companion-view'
+import { PageHeader } from '@/components/page-header'
+import { BottomNav } from '@/components/bottom-nav'
 
 export const dynamic = 'force-dynamic'
 
@@ -17,27 +18,17 @@ export default async function CompanionPage() {
   await logEvent({ user_id: user.id, event_type: 'companion_surfaced', attrs: { ...today.counts } })
 
   return (
-    <main
-      style={{
-        padding: 24,
-        fontFamily: 'system-ui, sans-serif',
-        maxWidth: 760,
-        background: '#faf6ec',
-        minHeight: '100vh',
-        color: '#2c2a25',
-      }}
-    >
-      <p>
-        <Link href="/" style={{ color: '#b07a14' }}>
-          &larr; Home
-        </Link>
-      </p>
-      <h1 style={{ marginBottom: 4 }}>Follow-ups</h1>
-      <p style={{ color: '#6f6a5f' }}>
+    <main className="mp-page">
+      <PageHeader back="/" backLabel="Home" />
+      <h1 className="mp-h1">Today</h1>
+      <p className="mp-sub">
         Things and people in your life worth tending. Memo can think a follow-up through with you, but
         it never reaches out for you. The next step is yours to take.
       </p>
-      <CompanionView today={today} />
+      <div style={{ marginTop: 18 }}>
+        <CompanionView today={today} />
+      </div>
+      <BottomNav />
     </main>
   )
 }

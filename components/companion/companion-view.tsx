@@ -9,25 +9,28 @@ import { ContextAdder } from '@/components/context-adder'
 
 type PersonOpt = { id: string; name: string }
 
-// Warm, neutral placeholder palette (no purple). Temporary direction only; the
-// real styling is a V1 pass, so this is plain inline styling, not a theme layer.
-const CARD = '#fffdf7'
-const ACCENT = '#b07a14'
-const ACCENT_SOFT = '#f4ead0'
-const INK = '#2c2a25'
-const MUTED = '#6f6a5f'
-const LINE = '#e7ddc7'
+// Warm-notebook tokens (the shared design system). Colours reference the CSS
+// custom properties in globals.css so this surface inherits the same world.
+const CARD = 'var(--surf)'
+const ACCENT = 'var(--accent)'
+const ACCENT_SOFT = 'var(--accent-soft)'
+const INK = 'var(--txt)'
+const MUTED = 'var(--txt-muted)'
+const LINE = 'var(--line-strong)'
+const FIELD = 'var(--surf-2)'
+const FAINT = 'var(--txt-faint)'
+const BAD = 'var(--record-soft)'
 
 const btn: React.CSSProperties = {
   border: `1px solid ${LINE}`,
-  background: '#fffefb',
-  color: INK,
+  background: 'rgba(240, 230, 210, 0.04)',
+  color: MUTED,
   borderRadius: 999,
-  padding: '4px 12px',
+  padding: '6px 13px',
   cursor: 'pointer',
   fontSize: 13,
 }
-const accentBtn: React.CSSProperties = { ...btn, background: ACCENT_SOFT, borderColor: ACCENT, color: ACCENT }
+const accentBtn: React.CSSProperties = { ...btn, background: ACCENT_SOFT, borderColor: 'rgba(234, 177, 58, 0.4)', color: ACCENT }
 
 export function CompanionView({ today }: { today: Today }) {
   const people = today.people
@@ -157,7 +160,7 @@ function QueryBar({
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder="Search follow-ups..."
-        style={{ padding: 8, border: `1px solid ${LINE}`, borderRadius: 8, background: '#fffefb' }}
+        style={{ padding: 8, border: `1px solid ${LINE}`, borderRadius: 8, background: FIELD }}
       />
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
         <Chip label="Open" on={status === 'open'} onClick={() => setStatus(status === 'open' ? 'all' : 'open')} />
@@ -287,12 +290,12 @@ function FollowUpCard({ item, people }: { item: FollowUp; people: PersonOpt[] })
           <div style={{ color: MUTED, fontSize: 14, marginTop: 2 }}>{item.suggestion}</div>
           {planLabel ? <div style={{ color: ACCENT, fontSize: 12, marginTop: 2 }}>{planLabel}</div> : null}
           {item.timeSensitive ? (
-            <div style={{ fontSize: 12, marginTop: 2, color: item.passed ? '#b04a14' : ACCENT }}>
+            <div style={{ fontSize: 12, marginTop: 2, color: item.passed ? BAD : ACCENT }}>
               {item.passed ? 'deadline passed' : 'time-sensitive'}
               {item.deadline ? ` (${item.deadline.slice(0, 10)})` : ''}
             </div>
           ) : null}
-          {item.provenance ? <div style={{ color: '#a59c86', fontSize: 12, marginTop: 2 }}>{item.provenance}</div> : null}
+          {item.provenance ? <div style={{ color: FAINT, fontSize: 12, marginTop: 2 }}>{item.provenance}</div> : null}
         </div>
         <ContextAdder targetKind="commitment" targetId={item.commitmentId} label={item.headline} source="follow_up" compact />
       </div>
@@ -316,7 +319,7 @@ function FollowUpCard({ item, people }: { item: FollowUp; people: PersonOpt[] })
       </div>
 
       {planning ? (
-        <div style={{ marginTop: 10, display: 'grid', gap: 6, background: '#fffefb', border: `1px solid ${LINE}`, borderRadius: 8, padding: 10 }}>
+        <div style={{ marginTop: 10, display: 'grid', gap: 6, background: FIELD, border: `1px solid ${LINE}`, borderRadius: 8, padding: 10 }}>
           <p style={{ margin: 0, fontSize: 12, color: MUTED }}>
             Your own tracking only. This does not schedule or send anything. A passed deadline moves
             this to Past, never deletes it.
@@ -351,7 +354,7 @@ function FollowUpCard({ item, people }: { item: FollowUp; people: PersonOpt[] })
       ) : null}
 
       {brainstorm ? <BrainstormPanel seed={seed} /> : null}
-      {err ? <p style={{ color: 'crimson', fontSize: 13, margin: '6px 0 0' }}>{err}</p> : null}
+      {err ? <p style={{ color: BAD, fontSize: 13, margin: '6px 0 0' }}>{err}</p> : null}
     </Card>
   )
 }
@@ -376,7 +379,7 @@ function NudgeCard({ nudge }: { nudge: RelationshipNudge }) {
     <Card>
       <div style={{ fontWeight: 600 }}>{nudge.name ?? 'Someone close'}</div>
       <div style={{ color: MUTED, fontSize: 14, marginTop: 2 }}>{nudge.suggestion}</div>
-      {nudge.provenance ? <div style={{ color: '#a59c86', fontSize: 12, marginTop: 2 }}>{nudge.provenance}</div> : null}
+      {nudge.provenance ? <div style={{ color: FAINT, fontSize: 12, marginTop: 2 }}>{nudge.provenance}</div> : null}
       <div style={{ marginTop: 10 }}>
         <button type="button" style={accentBtn} onClick={() => setBrainstorm((b) => !b)}>
           {brainstorm ? 'Close' : 'Think it through'}
@@ -466,7 +469,7 @@ function BrainstormPanel({ seed }: { seed: string }) {
   }
 
   return (
-    <div style={{ marginTop: 10, background: '#fffefb', border: `1px solid ${LINE}`, borderRadius: 10, padding: 10 }}>
+    <div style={{ marginTop: 10, background: FIELD, border: `1px solid ${LINE}`, borderRadius: 10, padding: 10 }}>
       <div style={{ maxHeight: 280, overflowY: 'auto', display: 'grid', gap: 6 }}>
         {messages.map((m, i) => (
           <div key={i}>
@@ -496,7 +499,7 @@ function BrainstormPanel({ seed }: { seed: string }) {
           Send
         </button>
       </div>
-      {err ? <p style={{ color: 'crimson', fontSize: 13, margin: '6px 0 0' }}>{err}</p> : null}
+      {err ? <p style={{ color: BAD, fontSize: 13, margin: '6px 0 0' }}>{err}</p> : null}
     </div>
   )
 }

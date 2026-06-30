@@ -2,7 +2,6 @@ import { AuthForms } from '@/components/auth/auth-forms'
 
 // The entry screen. Email + password only (no magic link, no email dependency).
 // Sign in for returning users, Create account for an invited (allowlisted) person.
-// Visual polish comes in the redesign; this is functional and clear.
 export default async function LoginPage({
   searchParams,
 }: {
@@ -12,9 +11,15 @@ export default async function LoginPage({
   const initialMode = mode === 'create' ? 'create' : 'signin'
 
   return (
-    <main style={{ padding: 24, fontFamily: 'system-ui, sans-serif', maxWidth: 420 }}>
-      <h1>Memo Phoenix</h1>
-      <AuthForms error={error} mode={initialMode} />
+    <main className="mp-stage">
+      <div>
+        <div style={{ textAlign: 'center', marginBottom: 26 }}>
+          <span className="mp-mark" style={{ display: 'block', width: 64, height: 64, margin: '0 auto 14px' }} aria-hidden />
+          <h1 className="mp-h2">Memo</h1>
+          <p className="mp-sub" style={{ marginTop: 6 }}>A companion that remembers your life.</p>
+        </div>
+        <AuthForms error={error} mode={initialMode} />
+      </div>
     </main>
   )
 }

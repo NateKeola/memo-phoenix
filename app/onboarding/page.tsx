@@ -18,14 +18,15 @@ export default async function OnboardingPage() {
   const name = (user.app_metadata as { name?: string } | undefined)?.name || user.email?.split('@')[0]
 
   return (
-    <main style={{ padding: 24, fontFamily: 'system-ui, sans-serif', maxWidth: 640 }}>
-      <h1>Welcome to Memo{name ? `, ${name}` : ''}</h1>
-      <p>
+    <main className="mp-page mp-page--flush" style={{ maxWidth: 600 }}>
+      <p className="mp-eyebrow mp-eyebrow--accent" style={{ marginTop: 8 }}>Welcome</p>
+      <h1 className="mp-h1" style={{ marginTop: 10 }}>Welcome to Memo{name ? `, ${name}` : ''}</h1>
+      <p className="mp-sub">
         Memo is a companion that remembers your life and grows with you. To start, have a short, easy
         conversation so it can get to know you: the people who matter, what you do, what you are
         working on, what you care about. There are no wrong answers, and you can always add more later.
       </p>
-      <p style={{ color: '#666' }}>This is a voice conversation, so it needs your microphone.</p>
+      <p className="mp-meta" style={{ marginTop: 10 }}>This is a voice conversation, so it needs your microphone.</p>
       <OnboardingInterview />
     </main>
   )
