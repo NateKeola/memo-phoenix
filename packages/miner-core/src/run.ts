@@ -1,6 +1,7 @@
 import { admin } from './supabase'
 import { extractCapture, type Capture } from './extract'
 import { runDerivation } from './derive'
+import { INCREMENTAL, runIncrementalDerivation } from './incremental'
 import { logEvent } from './telemetry'
 import { addUsage, emptyUsage, type PassResult, type Usage } from './types'
 
@@ -52,7 +53,10 @@ export async function mine(userId: string, startedAtMs: number): Promise<MineSum
     if (!r.skipped) extracted++
   }
 
-  const passes = await runDerivation(userId)
+  // Default (MINER_INCREMENTAL unset): the full recompute, byte-for-byte unchanged.
+  // ON: fold in only the not-yet-incorporated captures (the full recompute is still
+  // used for the baseline and for corrections; see incremental.ts).
+  const passes = INCREMENTAL ? await runIncrementalDerivation(userId) : await runDerivation(userId)
 
   const summary: MineSummary = {
     captures: captures.length,
