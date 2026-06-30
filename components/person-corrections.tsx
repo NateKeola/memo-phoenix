@@ -77,36 +77,38 @@ export function PersonCorrections({
   }
 
   return (
-    <section style={{ marginTop: 24, borderTop: '1px solid #ddd', paddingTop: 16 }}>
-      <h2 style={{ fontSize: 18 }}>Fix identity</h2>
-      <p style={{ color: '#666', fontSize: 13, marginTop: 0 }}>
+    <section style={{ marginTop: 28 }}>
+      <hr className="mp-rule" />
+      <p className="mp-eyebrow">Fix identity</p>
+      <p className="mp-meta" style={{ marginTop: 8 }}>
         A correction is recorded now and applied on the next miner run. It does not change the graph
         immediately.
       </p>
 
-      <div style={{ display: 'grid', gap: 8, maxWidth: 460, marginBottom: 20 }}>
-        <strong style={{ fontSize: 14 }}>Rename</strong>
+      <div style={{ display: 'grid', gap: 10, marginTop: 16, marginBottom: 22 }}>
+        <span className="mp-label">Rename</span>
         <div style={{ display: 'flex', gap: 8 }}>
           <input
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             placeholder="Corrected name"
-            style={{ flex: 1, padding: 6 }}
+            className="mp-input"
+            style={{ flex: 1 }}
           />
-          <button type="button" onClick={doRename} disabled={busy || !newName.trim()}>
+          <button type="button" className="mp-btn mp-btn--ghost" onClick={doRename} disabled={busy || !newName.trim()}>
             Save rename
           </button>
         </div>
       </div>
 
-      <div style={{ display: 'grid', gap: 8, maxWidth: 460 }}>
-        <strong style={{ fontSize: 14 }}>Merge with another person</strong>
+      <div style={{ display: 'grid', gap: 10 }}>
+        <span className="mp-label">Merge with another person</span>
         {candidates.length > 0 ? (
-          <p style={{ fontSize: 13, color: '#666', margin: 0 }}>
+          <p className="mp-meta" style={{ margin: 0 }}>
             Likely the same person: {candidates.map((c) => c.name).join(', ')}
           </p>
         ) : null}
-        <select value={mergeFromId} onChange={(e) => setMergeFromId(e.target.value)} style={{ padding: 6 }}>
+        <select value={mergeFromId} onChange={(e) => setMergeFromId(e.target.value)} className="mp-input">
           <option value="">Select a person...</option>
           {candidates.length > 0 ? (
             <optgroup label="Likely duplicates">
@@ -125,20 +127,20 @@ export function PersonCorrections({
             ))}
           </optgroup>
         </select>
-        <label style={{ fontSize: 13 }}>
+        <label className="mp-meta" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           Keep the name:{' '}
-          <select value={survivor} onChange={(e) => setSurvivor(e.target.value as 'this' | 'other')}>
+          <select value={survivor} onChange={(e) => setSurvivor(e.target.value as 'this' | 'other')} className="mp-input" style={{ width: 'auto', flex: 1 }}>
             <option value="this">{person.name} (this one)</option>
             <option value="other">the selected person</option>
           </select>
         </label>
-        <button type="button" onClick={doMerge} disabled={busy || !mergeFromId}>
+        <button type="button" className="mp-btn mp-btn--ghost" style={{ justifySelf: 'start' }} onClick={doMerge} disabled={busy || !mergeFromId}>
           Save merge
         </button>
       </div>
 
-      {msg ? <p style={{ color: 'green', marginTop: 12 }}>{msg}</p> : null}
-      {err ? <p style={{ color: 'crimson', marginTop: 12 }}>{err}</p> : null}
+      {msg ? <p className="mp-ok" style={{ marginTop: 12 }}>{msg}</p> : null}
+      {err ? <p className="mp-bad" style={{ marginTop: 12 }}>{err}</p> : null}
     </section>
   )
 }

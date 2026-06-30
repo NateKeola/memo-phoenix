@@ -1,5 +1,7 @@
 import Link from 'next/link'
 import { CaptureMenu } from '@/components/capture-menu'
+import { BottomNav } from '@/components/bottom-nav'
+import { BrandSeed } from '@/components/brand-seed'
 import { isOperator } from '@/lib/auth/operator'
 import { requireAllowedUser } from '@/lib/auth/guard'
 
@@ -8,50 +10,68 @@ export default async function HomePage() {
   // only). Returns the RLS client + user, reused for the reads below.
   const { supabase, user } = await requireAllowedUser()
 
-  // In one parallel batch: is a mine in flight (the "building" banner), and does the
-  // user have any captures yet (so a brand-new user gets a get-started hint rather
-  // than a bare nav). The app is never a silent, unexplained empty shell.
-  const [{ data: activeRun }, { count: captureCount }] = await Promise.all([
+  // In one parallel batch: is a mine in flight (the "building" banner), how many
+  // captures the user has yet (so a brand-new user gets a get-started hint rather
+  // than a bare nav), and the people count for the home stat line. All RLS-scoped
+  // read-only counts; the app is never a silent, unexplained empty shell.
+  const [{ data: activeRun }, { count: captureCount }, { count: peopleCount }] = await Promise.all([
     supabase.from('miner_runs').select('id, status').eq('user_id', user.id).eq('status', 'running').limit(1).maybeSingle(),
     supabase.from('captures').select('id', { count: 'exact', head: true }).eq('user_id', user.id),
+    supabase.from('canonical_people').select('id', { count: 'exact', head: true }).eq('user_id', user.id).is('valid_to', null),
   ])
-  const isNew = (captureCount ?? 0) === 0 && !activeRun
+  const notes = captureCount ?? 0
+  const people = peopleCount ?? 0
+  const isNew = notes === 0 && !activeRun
+  const initial = (user.email ?? '?').trim().charAt(0).toUpperCase() || '?'
 
   return (
-    <main style={{ padding: 24, fontFamily: 'system-ui, sans-serif' }}>
-      <h1>Memo Phoenix</h1>
-      <p>Signed in as {user.email}</p>
+    <main className="mp-page" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+      <header className="mp-top">
+        <span className="mp-avatar" aria-hidden>{initial}</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          {isOperator(user) ? (
+            <Link href="/admin" className="mp-meta" style={{ color: 'var(--txt-muted)' }}>Invites</Link>
+          ) : null}
+          <form action="/auth/signout" method="post">
+            <button type="submit" className="mp-meta" style={{ border: 0, background: 'none', cursor: 'pointer', color: 'var(--txt-faint)' }}>
+              Sign out
+            </button>
+          </form>
+        </span>
+      </header>
+
+      <h1 className="mp-h1">Home</h1>
+
       {activeRun ? (
-        <p style={{ margin: '12px 0', background: '#fdf6e3', padding: 12, borderRadius: 8 }}>
+        <p className="mp-banner mp-rise" style={{ marginTop: 16 }}>
           Building your memory from your conversation. <Link href="/building">See progress &rarr;</Link>
         </p>
       ) : null}
       {isNew ? (
-        <p style={{ margin: '12px 0', color: '#555' }}>
-          Welcome. Add your first note or start an interview to begin building your memory.
+        <p className="mp-sub" style={{ marginTop: 14 }}>
+          Welcome. Tap the <span style={{ color: 'var(--accent)' }}>+</span> to add your first note or start
+          an interview, and Memo begins building your memory.
         </p>
       ) : null}
+
+      <div
+        style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          paddingBottom: 48,
+        }}
+      >
+        <BrandSeed />
+        <div className="mp-stat" style={{ marginTop: 24 }}>
+          {people} {people === 1 ? 'person' : 'people'} &middot; {notes} {notes === 1 ? 'note' : 'notes'}
+        </div>
+      </div>
+
       <CaptureMenu />
-      <p style={{ margin: '16px 0' }}>
-        <Link href="/ask">Ask your corpus &rarr;</Link>
-      </p>
-      <p style={{ margin: '16px 0' }}>
-        <Link href="/people">People &rarr;</Link>
-      </p>
-      <p style={{ margin: '16px 0' }}>
-        <Link href="/companion">Today &rarr;</Link>
-      </p>
-      <p style={{ margin: '16px 0' }}>
-        <Link href="/miner">Memory &rarr;</Link>
-      </p>
-      {isOperator(user) ? (
-        <p style={{ margin: '16px 0' }}>
-          <Link href="/admin">Invites (operator) &rarr;</Link>
-        </p>
-      ) : null}
-      <form action="/auth/signout" method="post">
-        <button type="submit">Sign out</button>
-      </form>
+      <BottomNav />
     </main>
   )
 }
