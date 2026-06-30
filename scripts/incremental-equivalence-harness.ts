@@ -9,13 +9,14 @@
 // (judged against the LLM-nondeterminism floor of full-vs-full), and how much faster /
 // cheaper is an incremental fold than a full recompute.
 //
-//   - userD (FULL, MINER_INCREMENTAL=0): full-mine the whole corpus -> snapshot D1;
-//     bust the derive-memo (an UPDATE, never a delete) and full re-derive -> D2.
-//     NOISE FLOOR = D1 vs D2 (two independent full derivations of the same corpus).
+//   - userA, userD (FULL, MINER_INCREMENTAL=0): two INDEPENDENT full mines of the whole
+//     corpus on SEPARATE users. NOISE FLOOR = A vs D. Separate users so the floor
+//     includes BOTH extraction and derivation nondeterminism, matching how C and D
+//     differ (a same-user re-derive shares the raw layer and understates the floor).
 //   - userC (INCREMENTAL, MINER_INCREMENTAL=1): mine the first ~70% of captures (the
 //     first run seeds the markers, so it runs the FULL baseline branch), then add the
 //     remaining ~30% and mine again (the INCREMENTAL fold) -> snapshot C.
-//   - EQUIVALENCE = C vs D2, judged against the noise floor.
+//   - EQUIVALENCE = C vs D, judged against the noise floor.
 //
 // Ids are uuidv5 over (user_id, table, normalized label), so they differ per user;
 // the structural diff therefore keys on the NORMALIZED LABEL (and, for edges, the
@@ -146,29 +147,6 @@ async function cloneCaptures(db: SupabaseClient, userId: string, caps: SrcCaptur
   const { error } = await db.from('captures').insert(rows)
   if (error) throw new Error(`clone captures: ${error.message}`)
   return rows.length
-}
-
-// Bust the derive-memo so a second full mine re-derives (no re-extraction). An UPDATE
-// of the input_hash, never a delete (miner_state is mutable operational state).
-async function bustDeriveMemo(db: SupabaseClient, userId: string): Promise<number> {
-  const { data, error } = await db
-    .from('miner_state')
-    .select('id, scope')
-    .eq('user_id', userId)
-    .like('scope', 'derive:%')
-  if (error) throw new Error(`read derive memo: ${error.message}`)
-  const ids = (data ?? []).map((r) => (r as { id: string }).id)
-  let busted = 0
-  for (const id of ids) {
-    const { error: uErr } = await db
-      .from('miner_state')
-      .update({ input_hash: 'HARNESS_BUST', updated_at: new Date().toISOString() })
-      .eq('user_id', userId)
-      .eq('id', id)
-    if (uErr) throw new Error(`bust memo: ${uErr.message}`)
-    busted++
-  }
-  return busted
 }
 
 type MineMetrics = { wallMs: number; tokensIn: number; tokensOut: number; llmCalls: number; passes: Record<string, unknown>[] }
@@ -381,6 +359,16 @@ async function orchestrate(): Promise<void> {
   const srcArg = argv.indexOf('--source')
   const sourceEmail = srcArg >= 0 ? argv[srcArg + 1] : 'natekeola@icloud.com'
 
+  // SCALING NOTE for the FULL baseline mines: the miner's callClaude is non-streaming.
+  // On a large/dense corpus a single full pass (e.g. ~50 people, with adaptive thinking)
+  // either truncates at the 16k default (raise it) OR, raised too high (~64k), trips the
+  // SDK's "streaming required for >10 min" guard. So the full recompute does not scale
+  // cleanly here without a streaming-capable miner (itself an argument for incremental,
+  // whose per-pass output is small). For a large corpus, either run a streaming miner or
+  // keep the corpus moderate (the default 16k completes for ~<=35 people). Overridable
+  // via MINER_MAX_TOKENS; left at the miner's own default unless set.
+  if (process.env.MINER_MAX_TOKENS) console.log(`MINER_MAX_TOKENS=${process.env.MINER_MAX_TOKENS}`)
+
   const db = admin()
   console.log('== Incremental equivalence + perf harness ==')
   console.log(`source corpus: ${sourceEmail}${capLimit ? ` (capped to ${capLimit})` : ' (all)'}`)
@@ -395,17 +383,21 @@ async function orchestrate(): Promise<void> {
   const secondBatch = caps.slice(split)
   console.log(`split: baseline ${firstBatch.length} + fold ${secondBatch.length}`)
 
-  // --- userD: the FULL path, and the noise floor (two independent full derivations) ---
-  const userD = await createThrowawayUser(db, 'full')
+  // --- NOISE FLOOR: two INDEPENDENT full mines on SEPARATE users (userA, userD).
+  // Independent extraction AND derivation, so the floor matches how C vs D differ
+  // (C and D also extract independently). A same-user re-derive would understate the
+  // floor by sharing the raw layer, making incremental look worse than it is. ---
+  const userA = await createThrowawayUser(db, 'fullA')
+  await cloneCaptures(db, userA, caps)
+  const dFull1 = mineOnce(userA, false, 'A full (whole corpus, noise-floor arm 1)')
+  const snapD1 = await snapshot(db, userA)
+
+  const userD = await createThrowawayUser(db, 'fullD')
   await cloneCaptures(db, userD, caps)
-  const dFull1 = mineOnce(userD, false, 'D full #1 (whole corpus)')
-  const snapD1 = await snapshot(db, userD)
-  const busted = await bustDeriveMemo(db, userD)
-  console.log(`    busted ${busted} derive-memo scopes (re-derive, no re-extraction)`)
-  const dFull2 = mineOnce(userD, false, 'D full #2 (re-derive, noise floor)')
+  const dFull2 = mineOnce(userD, false, 'D full (whole corpus, noise-floor arm 2 + equivalence baseline)')
   const snapD2 = await snapshot(db, userD)
 
-  // --- userC: the production-shaped incremental path ---
+  // --- userC: the production-shaped incremental path (baseline ~70% then fold ~30%) ---
   const userC = await createThrowawayUser(db, 'inc')
   await cloneCaptures(db, userC, firstBatch)
   const cBaseline = mineOnce(userC, true, `C baseline (${firstBatch.length}, full branch)`)
@@ -431,7 +423,7 @@ async function orchestrate(): Promise<void> {
   // --- diffs ---
   const noiseFloor = diffSnapshots(snapD1, snapD2)
   const equivalence = diffSnapshots(snapC, snapD2)
-  printDiff('NOISE FLOOR: D full#1 vs D full#2 (LLM nondeterminism yardstick)', noiseFloor)
+  printDiff('NOISE FLOOR: two independent full mines, separate users (LLM nondeterminism yardstick)', noiseFloor)
   printDiff('EQUIVALENCE: C incremental vs D full (the test)', equivalence)
 
   const floorRaw = sumRaw(noiseFloor)
@@ -448,7 +440,7 @@ async function orchestrate(): Promise<void> {
   console.log('\n== PERF + COST ==')
   const s = (m: MineMetrics) => `${(m.wallMs / 1000).toFixed(1)}s, ${m.llmCalls} calls, ${m.tokensIn}+${m.tokensOut} tok`
   console.log(`  full recompute (whole corpus)  : ${s(dFull1)}`)
-  console.log(`  full re-derive (noise floor)   : ${s(dFull2)}`)
+  console.log(`  full mine (noise-floor arm 2)   : ${s(dFull2)}`)
   console.log(`  incremental baseline (${firstBatch.length} caps): ${s(cBaseline)}`)
   console.log(`  incremental FOLD (+${secondBatch.length} caps)    : ${s(cFold)}`)
   const speedup = dFull1.wallMs / Math.max(1, cFold.wallMs)
@@ -467,7 +459,7 @@ async function orchestrate(): Promise<void> {
   console.log(`  genuine divergence within floor: ${withinFloor}  (incremental ${equivCore} vs floor*2+6 = ${floorCore * 2 + 6})`)
   console.log(`  fold under 300s & faster       : ${foldFast}  (${(cFold.wallMs / 1000).toFixed(1)}s)`)
   console.log(`\n  RECOMMENDATION: ${pass ? 'PASS' : 'NEEDS REVIEW'} - ${pass ? 'incremental preserves the graph (coverage + genuine structure) and is far faster; safe to flip MINER_INCREMENTAL=1 after review. Cosmetic label drift and the insights gap are trued up by the periodic full rebuild; pair with MINER_STABLE_IDENTITY to minimize drift.' : 'genuine entity/edge divergence exceeds the noise floor; inspect the genuine onlyA/onlyB lists above before flipping.'}`)
-  console.log(`\n  throwaway users (residue, no deletes): full=${userD} inc=${userC}`)
+  console.log(`\n  throwaway users (residue, no deletes): fullA=${userA} fullD=${userD} inc=${userC}`)
 }
 
 // Quick re-analysis of two EXISTING users (full=A, incremental=B) without mining, so
