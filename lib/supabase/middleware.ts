@@ -38,9 +38,15 @@ export async function updateSession(request: NextRequest) {
   // them to /login; the session is still refreshed above for the route handler.
   // /not-authorized is reachable by a signed-in but not-allowlisted user (the route
   // guard sends them there), so it must not be bounced by the gates below.
+  // /reset-password and /forgot-password are reachable WITHOUT a normal session:
+  // a recovery link lands on /reset-password (its page handles the no-session case
+  // by showing a clean "expired" state), and a locked-out user needs /forgot-password.
+  // Marking them public also exempts them from the onboarding gate below.
   const isPublic =
     path === '/login' ||
     path === '/not-authorized' ||
+    path === '/forgot-password' ||
+    path === '/reset-password' ||
     path.startsWith('/auth') ||
     path.startsWith('/api')
 
