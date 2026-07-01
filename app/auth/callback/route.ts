@@ -27,5 +27,10 @@ export async function GET(request: NextRequest) {
     if (!error) return NextResponse.redirect(`${origin}${next}`)
   }
 
+  // A failed RECOVERY link should land on the reset page's clean "expired" state,
+  // not a generic sign-in error, so the person knows to ask for a fresh link.
+  if (type === 'recovery' || next === '/reset-password') {
+    return NextResponse.redirect(`${origin}/reset-password?error=expired`)
+  }
   return NextResponse.redirect(`${origin}/login?error=auth_callback_failed`)
 }

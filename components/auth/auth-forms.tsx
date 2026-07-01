@@ -91,7 +91,10 @@ export function AuthForms({ error, mode: initialMode }: { error?: string; mode?:
       )}
 
       <p className="mp-meta" style={{ marginTop: 24 }}>
-        Apple and Google sign-in are coming later. Forgot your password? Contact your admin.
+        <a href="/forgot-password" className="mp-link">Forgot your password?</a>
+      </p>
+      <p className="mp-meta" style={{ marginTop: 8 }}>
+        Apple and Google sign-in are coming later.
       </p>
     </div>
   )
