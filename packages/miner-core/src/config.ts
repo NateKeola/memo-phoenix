@@ -11,12 +11,27 @@ export const EFFORT = process.env.MINER_EFFORT || 'high'
 // explicitly disabled.
 export const THINKING_ON = process.env.MINER_THINKING !== 'off'
 
-export const MAX_TOKENS = Number(process.env.MINER_MAX_TOKENS) || 16000
+// Output ceiling per LLM call. This is a CEILING, not a target: the model stops at
+// end_turn when done, so raising it does not increase normal output, it only removes
+// the truncation cliff. `callClaude` (anthropic.ts) is NON-STREAMING, and with
+// adaptive thinking ON (EFFORT below) thinking shares this budget with the emitted
+// JSON. At the old 16000 the people pass truncated mid-JSON ("Unterminated string")
+// once thinking plus a large node batch exceeded 16k. 24000 gives clear headroom for
+// thinking + a full page (see pageLimit) without approaching the non-streaming
+// timeout window: Opus 4.8 allows up to 128k output but the SDK wants streaming for
+// large non-streaming outputs, and 24k is well below that (and, paired with the
+// smaller page size, actual generation per call stays a few minutes). Streaming
+// callClaude is the deeper fix and is out of scope here.
+export const MAX_TOKENS = Number(process.env.MINER_MAX_TOKENS) || 24000
 
-// Pagination: cap items emitted per LLM call so a large set is never truncated.
+// Pagination: cap items emitted per LLM call so a large set is never truncated. This
+// is the primary anti-truncation lever: a smaller page bounds each call's output so
+// thinking + the batch fit under MAX_TOKENS with room to spare, and the pass simply
+// paginates for larger sets. 40 (was 200) keeps a full batch at roughly 5-8k output
+// tokens; a ~46-person graph is one or two batches, far under MAX_BATCHES.
 export function pageLimit(): number {
   const n = Number(process.env.MINER_PAGE_SIZE)
-  return Number.isFinite(n) && n > 0 ? n : 200
+  return Number.isFinite(n) && n > 0 ? n : 40
 }
 
 export const MAX_BATCHES = 40

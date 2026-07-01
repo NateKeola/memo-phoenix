@@ -46,6 +46,17 @@ jobs:
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      # Incremental is ON by default so the FIRST (baseline) run does the full
+      # recompute AND writes the per-capture `incorporated:<id>` markers, after which
+      # routine mines are small. Without this the baseline never establishes the
+      # markers and every mine stays a full recompute. Set the repo variable
+      # MINER_INCREMENTAL=0 to force a full rebuild (e.g. to true up global insights).
+      MINER_INCREMENTAL: ${{ vars.MINER_INCREMENTAL || '1' }}
+      # Token-budget knobs default correctly in packages/miner-core/src/config.ts
+      # (PAGE_SIZE 40, MAX_TOKENS 24000); these repo-variable passthroughs let the
+      # operator tune without a code change. Empty (unset) falls back to the defaults.
+      MINER_PAGE_SIZE: ${{ vars.MINER_PAGE_SIZE }}
+      MINER_MAX_TOKENS: ${{ vars.MINER_MAX_TOKENS }}
       MINER_MODEL: ${{ secrets.MINER_MODEL }}
       MINER_EFFORT: ${{ secrets.MINER_EFFORT }}
     steps:
