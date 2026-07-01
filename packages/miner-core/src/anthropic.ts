@@ -20,6 +20,19 @@ function getClient(): Anthropic {
   return client
 }
 
+// Assemble the answer text from a completed message: the text blocks only. Extended
+// thinking lives in separate `thinking` blocks (adaptive thinking keeps reasoning out
+// of the answer), so filtering to text blocks means thinking never leaks into the
+// parsed JSON. This is the same reconstruction for a streamed or non-streamed
+// message (finalMessage() returns the identical block shape). Exported so the
+// assembly can be checked offline (scripts/check-streaming.ts).
+export function messageText(content: Anthropic.ContentBlock[]): string {
+  return content
+    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n')
+}
+
 // One LLM call. The static stage instructions go in a cached system block
 // (cache_control ephemeral) so repeated pagination batches and repeated captures
 // reuse the prefix; the variable data goes in the user message. Adaptive thinking
@@ -36,14 +49,24 @@ export async function callClaude(system: string, user: string): Promise<LlmResul
     system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
     messages: [{ role: 'user', content: user }],
   }
-  const message = await getClient().messages.create(
-    params as unknown as Anthropic.MessageCreateParamsNonStreaming
-  )
+  // Stream the request. The SDK's NON-streaming messages.create refuses upfront any
+  // request whose max_tokens could imply a >10-minute generation
+  // (client.js _calculateNonstreamingTimeout throws "Streaming is required for
+  // operations that may take longer than 10 minutes" once max_tokens exceeds
+  // ~21,333: (60 * max_tokens) / 128000 > 10 min). Raising MAX_TOKENS to 24000 (with
+  // extended thinking on) crossed that line, so the full-recompute passes were
+  // refused. messages.stream() has no such upfront limit; each call still emits a
+  // bounded page (pageLimit), so a single request stays well under 10 minutes.
+  // finalMessage() assembles the SAME Message a non-streaming create returns
+  // (thinking + text blocks, usage, stop_reason), so the extraction below is
+  // byte-identical and the JSON parses the same. The SDK's built-in retries and abort
+  // apply to the stream request too; a mid-stream failure rejects finalMessage() and
+  // propagates exactly as a non-streaming error did.
+  const message = await getClient()
+    .messages.stream(params as unknown as Anthropic.MessageStreamParams)
+    .finalMessage()
 
-  const raw = (message.content as Anthropic.ContentBlock[])
-    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-    .map((b) => b.text)
-    .join('\n')
+  const raw = messageText(message.content as Anthropic.ContentBlock[])
 
   if (!raw.trim()) {
     // model returned only thinking blocks (or stopped early): a clearer error
