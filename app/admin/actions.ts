@@ -2,10 +2,11 @@
 
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
+import { headers } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
-import { isOperator } from '@/lib/auth/operator'
-import { deleteUser } from '@/lib/supabase/auth-admin'
-import { normalizeEmail, isValidEmail, type Invite } from '@/lib/invites'
+import { isOperator, resolveSiteUrl } from '@/lib/auth/operator'
+import { deleteUser, generateRecoveryLink, RecoveryUserMissingError } from '@/lib/supabase/auth-admin'
+import { normalizeEmail, isValidEmail, isInvited, type Invite } from '@/lib/invites'
 import { logEvent } from '@/lib/telemetry'
 
 // All admin actions re-verify the operator server-side. The /admin page is also
@@ -65,6 +66,73 @@ export async function inviteAction(_prev: InviteState, formData: FormData): Prom
   })
   revalidatePath('/admin')
   return { ok: true, email }
+}
+
+export type RecoveryState = { ok?: boolean; email?: string; link?: string; error?: string }
+
+// Generates a password-RECOVERY link for an existing, allowlisted account and shows
+// it inline (exactly like the invite flow shows an invite). NO email is sent: the
+// operator copies the link and sends it to the person out of band (text, etc.). This
+// is the reliable recovery path in the beta because the built-in Supabase email
+// sender is rate-limited and unreliable. Two gates:
+//   1. operator-only (requireOperator, re-checked server-side);
+//   2. allowlist-scoped: only the operator's own address or an actively-invited
+//      email can be recovered (never an arbitrary or revoked address).
+// The link resolves to the DEPLOYED URL via resolveSiteUrl (no silent localhost),
+// and points at /auth/callback (token_hash + type=recovery) which establishes the
+// recovery session and forwards to /reset-password.
+export async function recoveryLinkAction(
+  _prev: RecoveryState,
+  formData: FormData
+): Promise<RecoveryState> {
+  const { user } = await requireOperator()
+  const email = normalizeEmail(String(formData.get('email') ?? ''))
+  if (!isValidEmail(email)) return { error: 'Enter a valid email address.' }
+
+  // Allowlist scope: the operator's own email (configured or their signed-in
+  // address), or an address with an active invite. Never an arbitrary or revoked one.
+  const operatorEmail = process.env.MEMO_ADMIN_EMAIL?.trim().toLowerCase()
+  const signedInEmail = user.email?.trim().toLowerCase()
+  const isSelf =
+    Boolean(operatorEmail && email === operatorEmail) ||
+    Boolean(signedInEmail && email === signedInEmail)
+  if (!isSelf && !(await isInvited(email))) {
+    return { error: `${email} is not on the allowlist. Only allowlisted users can be recovered.` }
+  }
+
+  // Resolve the deployed base URL; refuse loudly rather than mint a dead localhost
+  // link (matches the invite-redirect posture).
+  const h = await headers()
+  const host = h.get('x-forwarded-host') ?? h.get('host') ?? undefined
+  const proto = h.get('x-forwarded-proto') ?? 'https'
+  const origin = host ? `${proto}://${host}` : undefined
+  const site = resolveSiteUrl(origin)
+  if ('error' in site) return { error: site.error }
+
+  const next = '/reset-password'
+  const redirectTo = `${site.url}/auth/callback?next=${encodeURIComponent(next)}`
+
+  let hashedToken: string
+  try {
+    const res = await generateRecoveryLink({ email, redirectTo })
+    hashedToken = res.hashedToken
+  } catch (e) {
+    if (e instanceof RecoveryUserMissingError) {
+      return { error: `No account exists yet for ${email}. Invite them first, then they set a password.` }
+    }
+    const msg = e instanceof Error ? e.message : String(e)
+    return { error: 'Could not generate a recovery link: ' + msg }
+  }
+
+  const link =
+    `${site.url}/auth/callback` +
+    `?token_hash=${encodeURIComponent(hashedToken)}` +
+    `&type=recovery` +
+    `&next=${encodeURIComponent(next)}`
+
+  await logEvent({ user_id: user.id, event_type: 'recovery_link_created', name: email })
+  revalidatePath('/admin')
+  return { ok: true, email, link }
 }
 
 // Withdraws an invite. Marks it revoked so the allowlist no longer admits the email

@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { isOperator } from '@/lib/auth/operator'
 import { InviteForm } from '@/components/admin/invite-form'
+import { RecoveryForm } from '@/components/admin/recovery-form'
 import { PageHeader } from '@/components/page-header'
 import { revokeInviteAction } from './actions'
 import type { Invite } from '@/lib/invites'
@@ -36,6 +37,13 @@ export default async function AdminPage() {
       </p>
 
       <InviteForm />
+
+      <p className="mp-eyebrow" style={{ marginTop: 28 }}>Recover a password</p>
+      <p className="mp-sub" style={{ marginTop: 4 }}>
+        For an allowlisted person who forgot their password. Generates a link you send them
+        directly (no email is sent); they open it and set a new password.
+      </p>
+      <RecoveryForm />
 
       <p className="mp-eyebrow" style={{ marginTop: 24 }}>Invited</p>
       {invites.length === 0 ? (

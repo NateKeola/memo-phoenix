@@ -68,3 +68,49 @@ export async function deleteUser(userId: string): Promise<void> {
   const { error } = await admin.auth.admin.deleteUser(userId)
   if (error) throw error
 }
+
+// Sentinel the recovery action can branch on: there is no account for this email,
+// so there is nothing to recover (the operator should invite them instead).
+export class RecoveryUserMissingError extends Error {
+  constructor(email: string) {
+    super(`No account exists for ${email}.`)
+    this.name = 'RecoveryUserMissingError'
+  }
+}
+
+// Mints a password-RECOVERY link for an existing account, WITHOUT sending any email
+// (the admin API is exempt from SMTP entirely; the built-in Supabase sender is
+// rate-limited and unreliable, which is why the dashboard recovery email did not
+// arrive). The operator copies the returned link and sends it out of band. The
+// caller must have already confirmed the email is allowlisted.
+//
+// We return the `hashed_token` so the caller can build a link at OUR /auth/callback
+// (token_hash + type=recovery -> verifyOtp establishes the recovery session), the
+// same shape the invite/magic-link path already uses, rather than the Supabase-hosted
+// action_link. That keeps recovery on the deployed domain and reuses the tested
+// callback. `redirectTo` is passed through for completeness (and must be in the
+// Supabase Auth Redirect URLs allowlist) in case the raw action_link is ever used.
+export async function generateRecoveryLink(opts: {
+  email: string
+  redirectTo: string
+}): Promise<{ hashedToken: string; actionLink: string }> {
+  const admin = createAdminClient()
+  const { data, error } = await admin.auth.admin.generateLink({
+    type: 'recovery',
+    email: opts.email,
+    options: { redirectTo: opts.redirectTo },
+  })
+  if (error) {
+    // GoTrue returns a 404/"user not found" when the email has no account.
+    if (/not.*found|no.*user|user.*not.*exist/i.test(error.message)) {
+      throw new RecoveryUserMissingError(opts.email)
+    }
+    throw error
+  }
+  const hashedToken = data?.properties?.hashed_token
+  const actionLink = data?.properties?.action_link
+  if (!hashedToken || !actionLink) {
+    throw new Error('generateLink(recovery) returned no token')
+  }
+  return { hashedToken, actionLink }
+}
