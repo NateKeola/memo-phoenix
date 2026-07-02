@@ -13,6 +13,7 @@ import {
   useLiveStatus,
 } from '@/components/interview-debug'
 import { acquireMic, releaseStream, describeMicError } from '@/lib/media/mic'
+import { MicDiagnostics, type DownstreamLine } from '@/components/mic-diagnostics'
 
 type Phase = 'intro' | 'connecting' | 'live' | 'closing' | 'saving' | 'error' | 'not-captured'
 type Line = { role: string; text: string }
@@ -68,6 +69,10 @@ function Inner() {
   const heardCloseRef = useRef(false)
   // latest finalizeEnd, so the (register-once) conversation callbacks can call it
   const finalizeEndRef = useRef<null | (() => Promise<void>)>(null)
+  // live browser mic stream, kept for the session so the diagnostics meter runs
+  // alongside the SDK; released in finalizeEnd / error / unmount.
+  const [micStream, setMicStream] = useState<MediaStream | null>(null)
+  const micStreamRef = useRef<MediaStream | null>(null)
   // Clear the pacing timers AND re-allow arming. Without this a retried session
   // inherited the first session's clocks: the soft timer could wrap a fresh
   // conversation minutes in, or a retry ran with no pacing at all.
@@ -102,6 +107,8 @@ function Inner() {
       if (timeoutRef.current) clearTimeout(timeoutRef.current)
       if (sessionSoftRef.current) clearTimeout(sessionSoftRef.current)
       if (sessionHardRef.current) clearTimeout(sessionHardRef.current)
+      releaseStream(micStreamRef.current)
+      micStreamRef.current = null
     },
     []
   )
@@ -158,6 +165,22 @@ function Inner() {
     vadRef
   )
 
+  // Defensive: ensure the SDK mic is UNMUTED once connected (see interview-widget).
+  const unmutedRef = useRef(false)
+  useEffect(() => {
+    const c = conversation as { status?: string; setMuted?: (m: boolean) => void }
+    if (c.status === 'connected' && !unmutedRef.current) {
+      unmutedRef.current = true
+      try {
+        c.setMuted?.(false)
+        log('ensured SDK mic unmuted on connect')
+      } catch {
+        /* setMuted may be unavailable */
+      }
+    }
+    if (c.status !== 'connected') unmutedRef.current = false
+  }, [conversation, log])
+
   const start = useCallback(async () => {
     setError('')
     setPhase('connecting')
@@ -174,13 +197,16 @@ function Inner() {
     }, 20000)
     try {
       try {
-        // Confirm permission, then RELEASE the device so the ElevenLabs SDK owns it
-        // (a leftover probe stream held the mic and starved the SDK's capture);
-        // acquireMic also reports an in-app browser / insecure context clearly.
+        // KEEP the stream alive for the session so the browser-level meter runs
+        // alongside the SDK's own capture (Chrome allows concurrent getUserMedia);
+        // this separates "browser gets no audio" from "SDK gets no audio". acquireMic
+        // also reports an in-app browser / insecure context clearly. Released in
+        // finalizeEnd / the error path / unmount.
         const stream = await acquireMic()
         const t = stream.getAudioTracks()[0]
         log(`mic permission granted: tracks=${stream.getAudioTracks().length} state=${t?.readyState} enabled=${t?.enabled} muted=${t?.muted}`)
-        releaseStream(stream)
+        micStreamRef.current = stream
+        setMicStream(stream)
       } catch (e) {
         log(`getUserMedia failed: ${e instanceof Error ? e.message : String(e)}`)
         throw e instanceof Error ? e : new Error(describeMicError(e))
@@ -239,6 +265,9 @@ function Inner() {
     } catch {
       // ignore; we still try to save
     }
+    releaseStream(micStreamRef.current)
+    micStreamRef.current = null
+    setMicStream(null)
     try {
       const endRes = await fetch('/api/interview/end', {
         method: 'POST',
@@ -457,7 +486,38 @@ function Inner() {
         </div>
       ) : null}
 
+      {phase !== 'intro' ? (
+        <MicDiagnostics
+          stream={micStream}
+          error={error || null}
+          downstream={buildSdkLines(conversation, vadRef.current, phase)}
+          note={phase === 'live' ? 'Speak: the input level should move AND ElevenLabs input vol should rise.' : undefined}
+        />
+      ) : null}
+
       <DebugReadout title="/onboarding" status={liveStatus} lines={dbgLines} />
     </div>
   )
+}
+
+// SDK-side downstream lines for the diagnostics panel (see interview-widget for the
+// rationale). Onboarding phases that are 'connected' include live and closing.
+function buildSdkLines(
+  conversation: { getInputVolume?: () => number; status?: string; isMuted?: boolean },
+  vad: { heard: boolean; max: number },
+  phase: string
+): DownstreamLine[] {
+  if (!['connecting', 'live', 'closing'].includes(phase)) return []
+  let vol = 0
+  try {
+    vol = conversation.getInputVolume ? conversation.getInputVolume() : 0
+  } catch {
+    /* getInputVolume throws once the session is gone */
+  }
+  return [
+    { label: 'SDK mic muted', value: conversation.isMuted ? 'MUTED' : 'unmuted', ok: !conversation.isMuted },
+    { label: 'ElevenLabs input vol', value: vol.toFixed(2), ok: vol > 0.02 },
+    { label: 'first user voice (VAD)', value: vad.heard ? `detected (max ${vad.max.toFixed(2)})` : 'not yet', ok: vad.heard },
+    { label: 'connection', value: String(conversation.status ?? '?'), ok: conversation.status === 'connected' },
+  ]
 }
