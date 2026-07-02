@@ -154,18 +154,21 @@ works for the existing user; only new self-service signups are blocked.
 
 Current state: signups DISABLED, 1 user (`natekeola@icloud.com`).
 
-### Password recovery (2026-07-01, `password-recovery`)
+### Password recovery (2026-07-01, `password-recovery` then `self-service-recovery`)
 
-Recovery does NOT reopen signups and does NOT depend on email delivery. The reliable
-path is operator-mediated: the operator generates a recovery link in `/admin`
-(`recoveryLinkAction` -> service-role `generateLink({type:'recovery'})`, no email) and
-sends it to the person; they set a new password on `/reset-password` (the recovery
-session established by `/auth/callback` verifyOtp; `updateUser` enforces the signup
-password policy). It is gated two ways: operator-only, and ALLOWLIST-SCOPED (only the
-operator's own email or an active invite; a revoked or arbitrary address is refused).
-The optional self-service email form on `/forgot-password` is OFF by default (needs
-`RECOVERY_EMAIL_SELF_SERVICE=1` + custom SMTP) and is allowlist-scoped +
-enumeration-safe. No new table, no RLS change; `disable_signup` stays `true`.
+Recovery does NOT reopen signups. SELF-SERVICE is the real path (`self-service-recovery`,
+now that custom SMTP is configured): on `/forgot-password` the user enters their email
+and `resetPasswordForEmail` emails a reset link that lands on `/reset-password`, where
+`updateUser` sets a new password (enforcing the signup password policy). It is
+ALLOWLIST-SCOPED (a real send happens only for the operator's own email or an active
+invite; a revoked/arbitrary address gets the same response but no send) and
+ENUMERATION-SAFE (one neutral message either way, so it never reveals which emails
+exist). The redirect resolves to the deployed URL (`resolveSiteUrl`, no localhost) and
+routes through `/auth/callback`. Recovery only sets a password on an EXISTING account;
+it mints nothing, so it cannot create an un-allowlisted account. The operator-mediated
+`/admin` recovery-link path (`recoveryLinkAction` -> service-role
+`generateLink({type:'recovery'})`, no email) remains as an unused operator fallback. No
+new table, no RLS change; `disable_signup` stays `true`.
 
 ### What B2 must change to allow invite-only access (NOT done here)
 
