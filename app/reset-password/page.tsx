@@ -39,10 +39,11 @@ export default async function ResetPasswordPage({
         {expired ? (
           <div style={{ textAlign: 'center' }}>
             <p className="mp-sub">
-              This recovery link has expired or is no longer valid. Ask your admin to send you a
-              new one.
+              This recovery link has expired or is no longer valid.
             </p>
             <p className="mp-meta" style={{ marginTop: 18 }}>
+              <Link href="/forgot-password" className="mp-link">Request a new link</Link>
+              {' '}&middot;{' '}
               <Link href="/login" className="mp-link">Back to sign in</Link>
             </p>
           </div>

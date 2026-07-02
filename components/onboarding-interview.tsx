@@ -13,7 +13,7 @@ import {
   useLiveStatus,
 } from '@/components/interview-debug'
 
-type Phase = 'intro' | 'connecting' | 'live' | 'closing' | 'saving' | 'error'
+type Phase = 'intro' | 'connecting' | 'live' | 'closing' | 'saving' | 'error' | 'not-captured'
 type Line = { role: string; text: string }
 
 // The first-run onboarding interview. Reuses the existing interview agent and the
@@ -65,6 +65,8 @@ function Inner() {
   // closing-flow refs
   const endingRef = useRef(false)
   const heardCloseRef = useRef(false)
+  // latest finalizeEnd, so the (register-once) conversation callbacks can call it
+  const finalizeEndRef = useRef<null | (() => Promise<void>)>(null)
   // length-pacing refs (the soft wrap + hard backstop, set once when live)
   const phaseRef = useRef<Phase>('intro')
   const sessionSoftRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -104,9 +106,24 @@ function Inner() {
       setPhase('live')
     },
     onDisconnect: (details: unknown) => {
-      // The end controls drive the save flow. We only LOG why the session ended
-      // (reason=user is our own teardown; reason=agent/error is a server close).
       log(`onDisconnect ${describeDisconnect(details)}`)
+      // React to a disconnect we did not initiate. Before this, the UI kept showing
+      // "Listening..." against a dead socket indefinitely (the known
+      // ends-after-greeting failure), and the user talked into nothing.
+      if (endingRef.current) return // our own teardown; the save flow is driving
+      const p = phaseRef.current
+      if (p === 'closing') {
+        // the agent hung up after its goodbye: proceed to save what we have
+        void finalizeEndRef.current?.()
+        return
+      }
+      if (p === 'live' || p === 'connecting') {
+        setError(
+          'The connection ended unexpectedly. Nothing is lost if you barely started; press ' +
+            '"Try again" to reconnect, or skip for now and set Memo up later.'
+        )
+        setPhase('error')
+      }
     },
     onMessage: (m: unknown) => {
       const obj = (m ?? {}) as { message?: string; source?: string; role?: string }
@@ -227,6 +244,16 @@ function Inner() {
         const j = (await endRes.json().catch(() => ({}))) as { error?: string }
         throw new Error(j.error || 'could not save the conversation')
       }
+      const endJson = (await endRes.json().catch(() => ({}))) as { captured?: boolean }
+      if (endJson.captured === false) {
+        // The conversation was too short to capture. Do NOT silently complete
+        // onboarding over an empty capture (the old behavior dropped the user into
+        // an empty app believing Memo heard them): say so, and let them retry or
+        // deliberately skip.
+        endingRef.current = false
+        setPhase('not-captured')
+        return
+      }
       const compRes = await fetch('/api/onboarding/complete', { method: 'POST' })
       if (!compRes.ok) {
         const j = (await compRes.json().catch(() => ({}))) as { error?: string }
@@ -240,6 +267,24 @@ function Inner() {
       setPhase('error')
     }
   }, [conversation, router, log])
+  finalizeEndRef.current = finalizeEnd
+
+  // Deliberate escape hatch: onboarding must never trap a user. If the voice agent
+  // fails for them (mic, network, the known cutoff bug), they can skip, get into
+  // the app, and do the intro interview later from /capture/interview. Marks
+  // onboarding complete (skipped=true for telemetry) and goes home.
+  const skip = useCallback(async () => {
+    try {
+      await fetch('/api/onboarding/complete', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ skipped: true }),
+      })
+    } catch {
+      // even if the flag write fails, take them home; the middleware will re-offer
+    }
+    router.push('/')
+  }, [router])
 
   // The user chooses to end. We do NOT tear down yet: we cue the agent to give its
   // closing recap (the bible already instructs a warm, named recap on close) and let
@@ -311,6 +356,9 @@ function Inner() {
           <button type="button" className="mp-btn mp-btn--primary mp-btn--block" onClick={start}>
             Start the conversation
           </button>
+          <button type="button" className="mp-link" style={{ background: 'none', border: 0, cursor: 'pointer', fontSize: 14 }} onClick={() => void skip()}>
+            Skip for now, I will do this later
+          </button>
         </div>
       ) : null}
 
@@ -354,9 +402,30 @@ function Inner() {
       {phase === 'error' ? (
         <div style={{ display: 'grid', gap: 10, maxWidth: 460, marginTop: 8 }}>
           <p className="mp-bad" style={{ margin: 0 }}>{error}</p>
-          <button type="button" className="mp-btn mp-btn--ghost" style={{ justifySelf: 'start' }} onClick={() => setPhase('intro')}>
-            Try again
-          </button>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <button type="button" className="mp-btn mp-btn--ghost" onClick={() => { endingRef.current = false; setPhase('intro') }}>
+              Try again
+            </button>
+            <button type="button" className="mp-link" style={{ background: 'none', border: 0, cursor: 'pointer', fontSize: 14 }} onClick={() => void skip()}>
+              Skip for now
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {phase === 'not-captured' ? (
+        <div style={{ display: 'grid', gap: 10, maxWidth: 460, marginTop: 8 }}>
+          <p className="mp-bad" style={{ margin: 0 }}>
+            That conversation was too short to capture, so Memo has nothing to build from yet.
+          </p>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <button type="button" className="mp-btn mp-btn--primary" onClick={() => { endingRef.current = false; setPhase('intro') }}>
+              Try the conversation again
+            </button>
+            <button type="button" className="mp-link" style={{ background: 'none', border: 0, cursor: 'pointer', fontSize: 14 }} onClick={() => void skip()}>
+              Skip for now
+            </button>
+          </div>
         </div>
       ) : null}
 

@@ -5,7 +5,7 @@ import { revalidatePath } from 'next/cache'
 import { headers } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import { isOperator, resolveSiteUrl } from '@/lib/auth/operator'
-import { deleteUser, generateRecoveryLink, RecoveryUserMissingError } from '@/lib/supabase/auth-admin'
+import { deleteUser, findUserByEmail, generateRecoveryLink, RecoveryUserMissingError } from '@/lib/supabase/auth-admin'
 import { normalizeEmail, isValidEmail, isInvited, type Invite } from '@/lib/invites'
 import { logEvent } from '@/lib/telemetry'
 
@@ -150,9 +150,20 @@ export async function revokeInviteAction(formData: FormData): Promise<void> {
     .maybeSingle<Invite>()
   if (!inv) redirect('/admin?error=not_found')
 
-  if (inv.invited_user_id && inv.status !== 'accepted') {
+  // Delete the half-onboarded account so a withdrawn invite cannot be redeemed and
+  // a revoke+re-invite genuinely resets the person. The account id comes from the
+  // linked invited_user_id when present, else by email lookup (the pre-password-auth
+  // invites never linked it, which made Todd's account un-resettable). SAFETY: only
+  // an account that is invited=true and NOT onboarded is ever deleted; an onboarded
+  // account has real data and is never touched here.
+  if (inv.status !== 'accepted') {
     try {
-      await deleteUser(inv.invited_user_id)
+      let accountId: string | null = inv.invited_user_id
+      if (!accountId) {
+        const found = await findUserByEmail(inv.email)
+        if (found && found.invited && !found.onboarded) accountId = found.id
+      }
+      if (accountId) await deleteUser(accountId)
     } catch {
       // best effort: the account may already be gone; still mark the row revoked
     }

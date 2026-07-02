@@ -20,8 +20,15 @@ export async function GET(request: NextRequest) {
   const supabase = await createClient()
 
   if (code) {
-    const { error } = await supabase.auth.exchangeCodeForSession(code)
-    if (!error) return NextResponse.redirect(`${origin}${next}`)
+    const { data, error } = await supabase.auth.exchangeCodeForSession(code)
+    if (!error) {
+      // A bare ?code= landing does not say what kind of link it was. The session's
+      // JWT does: GoTrue stamps amr method 'recovery' on a password-recovery
+      // session. Send those to the reset page even when `next` did not say so
+      // (the dashboard-sent recovery email is exactly this shape).
+      const target = isRecoverySession(data?.session?.access_token) ? '/reset-password' : next
+      return NextResponse.redirect(`${origin}${target}`)
+    }
   } else if (tokenHash && type) {
     const { error } = await supabase.auth.verifyOtp({ type, token_hash: tokenHash })
     if (!error) return NextResponse.redirect(`${origin}${next}`)
@@ -33,4 +40,19 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(`${origin}/reset-password?error=expired`)
   }
   return NextResponse.redirect(`${origin}/login?error=auth_callback_failed`)
+}
+
+// Does this access token carry the 'recovery' authentication method? Decodes the
+// JWT payload locally (no verification needed: the token came from GoTrue in this
+// same exchange; we only read a routing hint from it).
+function isRecoverySession(accessToken: string | undefined | null): boolean {
+  if (!accessToken) return false
+  try {
+    const payload = JSON.parse(Buffer.from(accessToken.split('.')[1] ?? '', 'base64url').toString('utf8')) as {
+      amr?: Array<{ method?: string }>
+    }
+    return Boolean(payload.amr?.some((a) => a?.method === 'recovery'))
+  } catch {
+    return false
+  }
 }

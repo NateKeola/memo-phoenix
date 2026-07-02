@@ -1,4 +1,5 @@
 import { AuthForms } from '@/components/auth/auth-forms'
+import { RecoveryHashCatcher } from '@/components/auth/recovery-hash-catcher'
 
 // The entry screen. Email + password only (no magic link, no email dependency).
 // Sign in for returning users, Create account for an invited (allowlisted) person.
@@ -13,6 +14,7 @@ export default async function LoginPage({
   return (
     <main className="mp-stage">
       <div>
+        <RecoveryHashCatcher />
         <div style={{ textAlign: 'center', marginBottom: 26 }}>
           <span className="mp-mark" style={{ display: 'block', width: 64, height: 64, margin: '0 auto 14px' }} aria-hidden />
           <h1 className="mp-h2">Memo</h1>

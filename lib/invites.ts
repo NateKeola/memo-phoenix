@@ -32,15 +32,27 @@ export function isValidEmail(raw: string): boolean {
 // because the actor is an UNAUTHENTICATED visitor on the login page (the Create
 // account path), so the RLS client cannot read the operator-owned invites row. The
 // email is the only input; we never expose the invite contents.
+//
+// DEFENSE IN DEPTH (audit finding): the invites RLS policies let any authenticated
+// user INSERT rows scoped to their own user_id, and this check used to match by
+// email alone, so an already-invited user with the anon key could have appended an
+// invites row and allowlisted an arbitrary address. Only rows OWNED BY THE OPERATOR
+// count now (MEMO_USER_ID; when unset, the old email-only behavior applies with a
+// warning, so a missing env cannot lock the beta out).
 export async function isInvited(email: string): Promise<boolean> {
   const admin = createAdminClient()
-  const { data } = await admin
+  let q = admin
     .from('invites')
     .select('id')
     .eq('email', normalizeEmail(email))
     .neq('status', 'revoked')
-    .limit(1)
-    .maybeSingle()
+  const operatorId = process.env.MEMO_USER_ID?.trim()
+  if (operatorId) {
+    q = q.eq('user_id', operatorId)
+  } else {
+    console.warn('[invites] MEMO_USER_ID unset: isInvited cannot verify the invite owner (allowlist is email-only)')
+  }
+  const { data } = await q.limit(1).maybeSingle()
   return Boolean(data)
 }
 

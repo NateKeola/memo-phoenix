@@ -7,35 +7,41 @@ import { normalizeEmail, isValidEmail, isInvited } from '@/lib/invites'
 
 export type ForgotState = { ok?: boolean; message?: string; error?: string }
 
-// OPTIONAL self-service "email me a reset link" path. It is DISABLED by default and
-// only enabled when the operator sets RECOVERY_EMAIL_SELF_SERVICE=1 AND has configured
-// custom SMTP in Supabase. Without SMTP, Supabase's built-in sender is rate-limited
-// and unreliable (that is exactly why the dashboard recovery email did not arrive),
-// so we do NOT show or run this path by default; the admin recovery-link path is the
-// one that works. See docs/HANDOFF.md for the SMTP operator note.
+// Self-service password recovery: the user enters their email and Supabase emails a
+// reset link. ALWAYS available (the audit found the admin-only framing was a dead
+// end: there is no admin surface a locked-out user can reach). Two properties hold:
+//   1. Allowlist-scoped: a real send happens ONLY for an allowlisted address (the
+//      operator's own email or an active invite), so recovery cannot touch a
+//      non-account.
+//   2. Enumeration-safe: the SAME neutral message returns whether or not the email
+//      is registered or allowlisted.
 //
-// When enabled, it is allowlist-scoped and enumeration-safe: it only actually sends
-// to an allowlisted address, but ALWAYS returns the same neutral message, so it
-// never reveals whether an email has an account or is on the allowlist.
+// DELIVERY HONESTY: until custom SMTP is configured in Supabase (Authentication ->
+// SMTP; the live project currently has none), the built-in sender is rate-limited
+// (~2/hour) and may not deliver. The page copy tells the user what to do if no
+// email arrives (ask the operator for a direct recovery link, the /admin path,
+// which needs no email at all). Configure SMTP to make this path fully reliable.
+//
+// The link resolves to the DEPLOYED URL (resolveSiteUrl, no silent localhost) and
+// routes through /auth/callback, which establishes the session and forwards to
+// /reset-password; root landings and fragment tokens are also caught (middleware +
+// RecoveryHashCatcher), so however GoTrue shapes the link it ends at the reset page.
 export async function requestResetEmailAction(
   _prev: ForgotState,
   formData: FormData
 ): Promise<ForgotState> {
-  const enabled = process.env.RECOVERY_EMAIL_SELF_SERVICE === '1'
-  if (!enabled) {
-    return { error: 'Self-service email recovery is not enabled. Please contact your admin.' }
-  }
-
   const email = normalizeEmail(String(formData.get('email') ?? ''))
   if (!isValidEmail(email)) return { error: 'Enter a valid email address.' }
 
   const neutral: ForgotState = {
     ok: true,
-    message: 'If an account exists for that email, a reset link has been sent. It can take a minute to arrive.',
+    message:
+      'If an account exists for that email, a reset link is on its way. It can take a few minutes; ' +
+      'if nothing arrives, contact your admin for a direct recovery link.',
   }
 
-  // Only send to an allowlisted address; return the neutral message either way (no
-  // account/allowlist enumeration).
+  // Only actually send to an allowlisted address; return the neutral message either
+  // way (no account/allowlist enumeration).
   const operatorEmail = process.env.MEMO_ADMIN_EMAIL?.trim().toLowerCase()
   const allowed = Boolean(operatorEmail && email === operatorEmail) || (await isInvited(email))
   if (!allowed) return neutral
