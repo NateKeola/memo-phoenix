@@ -5,7 +5,16 @@
 // Recompute is id-preserving (deterministic UUIDv5) and memoized, so a second run
 // over unchanged input is a no-op. Provenance (source_claim_ids) is mandatory.
 
-export { mine, mineWithLock, assertUserId, type MineSummary, type MineRunResult } from './run'
+export {
+  mine,
+  mineWithLock,
+  assertUserId,
+  isRunStale,
+  STALE_RUN_MS,
+  type MineSummary,
+  type MineRunResult,
+  type StageReporter,
+} from './run'
 export { runDerivation } from './derive'
 // Incremental derivation (MINER_INCREMENTAL, default OFF). mergeEmitted is the pure
 // merge used by the deterministic equivalence check.

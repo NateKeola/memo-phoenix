@@ -1,5 +1,6 @@
 import 'server-only'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { isRunStale } from '@memo/miner-core'
 
 // --- Auto-run threshold (Open-Exploratory: a default is chosen, easy to change) ---
 //
@@ -35,20 +36,30 @@ type MineSummaryShape = {
 
 export type LedgerRun = {
   id: string
-  status: 'running' | 'done' | 'error'
+  // 'stalled' is a DERIVED state: the row says running but its heartbeat has been
+  // silent past the staleness threshold, i.e. the process was killed (typically a
+  // serverless timeout). The next run start reclaims it; readers show it honestly
+  // instead of an endless "in progress".
+  status: 'running' | 'done' | 'error' | 'stalled'
   trigger: string
   runtime: string | null
   started_at: string
   ended_at: string | null
   error: string | null
+  stage: string | null
   changes: RunChanges | null
   captures: number | null
   extracted: number | null
 }
 
 export type MinerState = {
-  active: { id: string; trigger: string; started_at: string } | null
+  active: { id: string; trigger: string; started_at: string; stage: string | null } | null
   newCaptures: number
+  // corrections (renames/merges) filed since the last successful mine. They are
+  // explicit user actions awaiting application and force the FULL derivation path,
+  // so they count as pending work for the auto-run decision (previously they
+  // triggered nothing and sat unapplied indefinitely).
+  pendingCorrections: number
   threshold: number
   shouldAutoRun: boolean
   lastSuccessfulAt: string | null
@@ -69,16 +80,23 @@ export function summarizeChanges(summary: MineSummaryShape | null | undefined): 
   )
 }
 
-function toLedgerRow(r: Record<string, unknown>): LedgerRun {
+function toLedgerRow(r: Record<string, unknown>, nowMs: number): LedgerRun {
   const summary = (r.summary ?? null) as MineSummaryShape | null
+  const rawStatus = r.status as 'running' | 'done' | 'error'
+  const status: LedgerRun['status'] =
+    rawStatus === 'running' &&
+    isRunStale({ started_at: String(r.started_at), heartbeat_at: (r.heartbeat_at as string | null) ?? null }, nowMs)
+      ? 'stalled'
+      : rawStatus
   return {
     id: String(r.id),
-    status: r.status as LedgerRun['status'],
+    status,
     trigger: String(r.trigger ?? 'manual'),
     runtime: (r.runtime as string | null) ?? null,
     started_at: String(r.started_at),
     ended_at: (r.ended_at as string | null) ?? null,
     error: (r.error as string | null) ?? null,
+    stage: (r.stage as string | null) ?? null,
     changes: summarizeChanges(summary),
     captures: typeof summary?.captures === 'number' ? summary.captures : null,
     extracted: typeof summary?.extracted === 'number' ? summary.extracted : null,
@@ -100,7 +118,7 @@ export async function getMinerState(
   const [{ data: runs }, { data: lastDone }] = await Promise.all([
     supabase
       .from('miner_runs')
-      .select('id, status, trigger, runtime, started_at, ended_at, summary, error')
+      .select('id, status, trigger, runtime, started_at, ended_at, summary, error, heartbeat_at, stage')
       .eq('user_id', userId)
       .order('started_at', { ascending: false })
       .limit(ledgerLimit),
@@ -113,17 +131,38 @@ export async function getMinerState(
       .limit(1)
       .maybeSingle(),
   ])
+  const nowMs = Date.now()
   const rows = (runs ?? []) as Record<string, unknown>[]
-  const activeRow = rows.find((r) => r.status === 'running') ?? null
+  // A run counts as ACTIVE only while it is alive (recent heartbeat). A stalled
+  // zombie must NOT suppress the auto-run measure or the daily cron: that exact
+  // suppression kept background mining off for hours in production. The zombie row
+  // itself is reclaimed by the next mineWithLock.
+  const activeRow =
+    rows.find(
+      (r) =>
+        r.status === 'running' &&
+        !isRunStale(
+          { started_at: String(r.started_at), heartbeat_at: (r.heartbeat_at as string | null) ?? null },
+          nowMs
+        )
+    ) ?? null
   const watermark = (lastDone?.started_at as string | undefined) ?? null
 
-  // Count captures created since that watermark (RLS-scoped + explicit user filter).
-  let q = supabase.from('captures').select('id', { count: 'exact', head: true }).eq('user_id', userId)
-  if (watermark) q = q.gt('created_at', watermark)
-  const { count } = await q
-  const newCaptures = count ?? 0
+  // Pending work since the watermark: new captures AND corrections filed after the
+  // last successful mine (both RLS-scoped + explicit user filter, in parallel).
+  let capQ = supabase.from('captures').select('id', { count: 'exact', head: true }).eq('user_id', userId)
+  if (watermark) capQ = capQ.gt('created_at', watermark)
+  let corrQ = supabase.from('corrections').select('id', { count: 'exact', head: true }).eq('user_id', userId)
+  if (watermark) corrQ = corrQ.gt('created_at', watermark)
+  const [{ count: capCount }, { count: corrCount }] = await Promise.all([capQ, corrQ])
+  const newCaptures = capCount ?? 0
+  const pendingCorrections = corrCount ?? 0
 
-  const shouldAutoRun = !activeRow && newCaptures >= AUTO_RUN_NEW_CAPTURES
+  // Auto-run when the capture measure crosses the threshold, OR when any correction
+  // is pending: a correction is an explicit user action (a rename/merge they expect
+  // to apply) and never accumulates toward a capture count, so without this clause
+  // it would wait indefinitely for unrelated captures to pile up.
+  const shouldAutoRun = !activeRow && (newCaptures >= AUTO_RUN_NEW_CAPTURES || pendingCorrections > 0)
 
   return {
     active: activeRow
@@ -131,12 +170,14 @@ export async function getMinerState(
           id: String(activeRow.id),
           trigger: String(activeRow.trigger ?? 'manual'),
           started_at: String(activeRow.started_at),
+          stage: (activeRow.stage as string | null) ?? null,
         }
       : null,
     newCaptures,
+    pendingCorrections,
     threshold: AUTO_RUN_NEW_CAPTURES,
     shouldAutoRun,
     lastSuccessfulAt: watermark,
-    ledger: rows.map(toLedgerRow),
+    ledger: rows.map((r) => toLedgerRow(r, nowMs)),
   }
 }

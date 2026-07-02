@@ -450,8 +450,14 @@ async function runInsightsPass(userId: string, nodes: CanonNode[]): Promise<Pass
 
 // ---- orchestration: A -> B -> C --------------------------------------------
 
-export async function runDerivation(userId: string): Promise<PassResult[]> {
+export async function runDerivation(
+  userId: string,
+  onStage?: (stage: string) => Promise<void>
+): Promise<PassResult[]> {
   const results: PassResult[] = []
+  const stage = async (s: string) => {
+    if (onStage) await onStage(s)
+  }
   const record = async (stage: string, p: PassResult) => {
     results.push(p)
     await logEvent({
@@ -485,6 +491,7 @@ export async function runDerivation(userId: string): Promise<PassResult[]> {
 
   // Stage A: people + places/orgs (independent, run concurrently). These resolve
   // first; everything downstream references them.
+  await stage('canonical_people')
   const aPeople = await runNodePass(userId, {
     rawTable: 'raw_people',
     canonicalTable: 'canonical_people',
@@ -493,6 +500,7 @@ export async function runDerivation(userId: string): Promise<PassResult[]> {
     context: [],
     peopleRewrite,
   })
+  await stage('canonical_places_orgs')
   const aPlaces = await runNodePass(userId, {
     rawTable: 'raw_places_orgs',
     canonicalTable: 'canonical_places_orgs',
@@ -518,6 +526,7 @@ export async function runDerivation(userId: string): Promise<PassResult[]> {
   ]
 
   // Stage B: projects, events, facts.
+  await stage('canonical_projects')
   const bProjects = await runNodePass(userId, {
     rawTable: 'raw_projects',
     canonicalTable: 'canonical_projects',
@@ -525,6 +534,7 @@ export async function runDerivation(userId: string): Promise<PassResult[]> {
     system: STAGE_B_PROJECTS_PROMPT,
     context: aNodes,
   })
+  await stage('canonical_events')
   const bEvents = await runNodePass(userId, {
     rawTable: 'raw_events',
     canonicalTable: 'canonical_events',
@@ -532,6 +542,7 @@ export async function runDerivation(userId: string): Promise<PassResult[]> {
     system: STAGE_B_EVENTS_PROMPT,
     context: aNodes,
   })
+  await stage('canonical_facts')
   const bFacts = await runNodePass(userId, {
     rawTable: 'raw_facts',
     canonicalTable: 'canonical_facts',
@@ -548,9 +559,11 @@ export async function runDerivation(userId: string): Promise<PassResult[]> {
   for (const t of ALL_NODE_TABLES) allNodes.push(...(await readCanonicalNodes(userId, t)))
 
   // Stage C: relationships, commitments, insights (cross-cutting, last).
+  await stage('canonical_relationships')
   const cRel = await runRelationshipsPass(userId, allNodes)
   await record('stage_c', cRel)
 
+  await stage('canonical_commitments')
   const cCommit = await runNodePass(userId, {
     rawTable: 'raw_commitments',
     canonicalTable: 'canonical_commitments',
@@ -560,6 +573,7 @@ export async function runDerivation(userId: string): Promise<PassResult[]> {
   })
   await record('stage_c', cCommit)
 
+  await stage('insights')
   const cInsights = await runInsightsPass(userId, allNodes)
   await record('stage_c', cInsights)
 
@@ -594,6 +608,7 @@ export async function runDerivation(userId: string): Promise<PassResult[]> {
   // CONFIDENCE itself is computed at read time (lib/freshness in the app), never
   // persisted, so a moving clock never churns canonical_history. This phase writes
   // only rows that actually changed, so an unchanged corpus stays a no-op.
+  await stage('freshness')
   const claimDates = await loadClaimDates(userId)
   const perTable = results
     .filter((p) => p.discrepancyItems && p.discrepancyItems.length)

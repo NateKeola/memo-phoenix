@@ -476,7 +476,13 @@ async function incRelationshipsPass(
 export type IncrementalMode = 'full' | 'incremental' | 'noop'
 
 // Returns the passes plus the mode taken, so the caller can log which path ran.
-export async function runIncrementalDerivation(userId: string): Promise<PassResult[]> {
+export async function runIncrementalDerivation(
+  userId: string,
+  onStage?: (stage: string) => Promise<void>
+): Promise<PassResult[]> {
+  const stage = async (s: string) => {
+    if (onStage) await onStage(s)
+  }
   const captures = await readCaptureIds(userId)
   const incorporated = await readIncorporatedSet(userId)
   const unincorporated = captures.filter((id) => !incorporated.has(id))
@@ -491,7 +497,7 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
 
   // --- FULL: baseline (first run on this graph) or a corrections change ---
   if (!baselineExists || correctionsChanged) {
-    const passes = await runDerivation(userId)
+    const passes = await runDerivation(userId, onStage)
     await markIncorporated(userId, captures)
     await setState(userId, CORR_FP_SCOPE, peopleRewrite.fingerprint)
     await logEvent({
@@ -511,6 +517,7 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
 
   // --- NO-OP: nothing new. Keep decay anchors / salience current (cheap), else idle.
   if (unincorporated.length === 0) {
+    await stage('freshness')
     const claimDates = await loadClaimDates(userId)
     const recon = await reconcileFreshness(userId, claimDates)
     await logEvent({
@@ -534,6 +541,7 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
   // pass runs, so it reflects the pre-fold graph.
 
   // Stage A: people + places.
+  await stage('canonical_people (fold)')
   results.push(
     await incNodePass(userId, {
       rawTable: 'raw_people',
@@ -547,6 +555,7 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
       peopleRewrite,
     })
   )
+  await stage('canonical_places_orgs (fold)')
   results.push(
     await incNodePass(userId, {
       rawTable: 'raw_places_orgs',
@@ -566,6 +575,7 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
   // Stage B: projects, events, facts. Context = the resolved A nodes plus the
   // existing same-table nodes, so a new mention of a known project/event/fact
   // resolves onto it instead of minting a variant.
+  await stage('canonical_projects (fold)')
   results.push(
     await incNodePass(userId, {
       rawTable: 'raw_projects',
@@ -576,6 +586,7 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
       newCaptureIds: unincorporated,
     })
   )
+  await stage('canonical_events (fold)')
   results.push(
     await incNodePass(userId, {
       rawTable: 'raw_events',
@@ -586,6 +597,7 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
       newCaptureIds: unincorporated,
     })
   )
+  await stage('canonical_facts (fold)')
   results.push(
     await incNodePass(userId, {
       rawTable: 'raw_facts',
@@ -604,7 +616,9 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
   for (const t of ['canonical_people', 'canonical_places_orgs', 'canonical_projects', 'canonical_events', 'canonical_facts']) {
     allNodes.push(...(await readCanonicalNodes(userId, t)))
   }
+  await stage('canonical_relationships (fold)')
   results.push(await incRelationshipsPass(userId, allNodes, unincorporated))
+  await stage('canonical_commitments (fold)')
   results.push(
     await incNodePass(userId, {
       rawTable: 'raw_commitments',
@@ -619,6 +633,7 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
   // Freshness tail: supersede from the NEW captures' discrepancies (idempotent,
   // claim-id-keyed), then reconcile anchors + graph-based salience (whole-layer,
   // writes only diffs, no LLM, cheap).
+  await stage('freshness')
   const claimDates = await loadClaimDates(userId)
   const perTable = results
     .filter((p) => p.discrepancyItems && p.discrepancyItems.length)
