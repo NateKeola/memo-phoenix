@@ -37,17 +37,37 @@ export type Capture = {
 async function resolveTargetLine(capture: Capture): Promise<string | null> {
   const { target_kind: kind, target_id: id, user_id: userId } = capture
   if (kind === 'person' && id) {
+    // The target may have been superseded since the capture was written (a merge or
+    // rename retired it); follow superseded_by once so the context line names the
+    // SURVIVOR, not a retired label (attributing to a retired label would re-mint it).
+    type PersonRow = {
+      label: string | null
+      data: Record<string, unknown> | null
+      valid_to?: string | null
+      superseded_by?: string | null
+    }
     const { data } = await admin()
       .from('canonical_people')
-      .select('label, data')
+      .select('label, data, valid_to, superseded_by')
       .eq('user_id', userId)
       .eq('id', id)
       .maybeSingle()
-    if (data) {
-      const d = ((data as { data: Record<string, unknown> | null }).data ?? {}) as Record<string, unknown>
+    let row: PersonRow | null = (data as PersonRow | null) ?? null
+    if (row && row.valid_to && row.superseded_by) {
+      const { data: surv } = await admin()
+        .from('canonical_people')
+        .select('label, data')
+        .eq('user_id', userId)
+        .eq('id', row.superseded_by)
+        .is('valid_to', null)
+        .maybeSingle()
+      if (surv) row = surv as PersonRow
+    }
+    if (row) {
+      const d = (row.data ?? {}) as Record<string, unknown>
       const name =
         `${typeof d.first_name === 'string' ? d.first_name : ''} ${typeof d.last_name === 'string' ? d.last_name : ''}`.trim() ||
-        (data as { label: string | null }).label ||
+        row.label ||
         'this person'
       return `Context: this note is about the person ${name}. Attribute the people, facts, and relationships in it to ${name} where it fits.`
     }
@@ -58,6 +78,7 @@ async function resolveTargetLine(capture: Capture): Promise<string | null> {
       .select('label')
       .eq('user_id', userId)
       .eq('id', id)
+      .is('valid_to', null)
       .maybeSingle()
     const label = (data as { label: string | null } | null)?.label
     if (label) return `Context: this note adds detail to the follow-up "${label}".`
@@ -72,6 +93,23 @@ export type ExtractResult = {
   rawInserted: number
   bySection: Record<string, number>
   usage: Usage
+}
+
+// Per-table raw-row counts for a capture. Used by the crash-recovery guard above;
+// only called for captures without an extract marker, so the 8 head-count probes
+// cost nothing on the steady-state path.
+async function captureRawCounts(userId: string, captureId: string): Promise<Record<string, number>> {
+  const out: Record<string, number> = {}
+  for (const table of Object.values(SECTION_TABLE)) {
+    const { count, error } = await admin()
+      .from(table)
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('capture_id', captureId)
+    if (error) throw new Error(`[miner] probe ${table} for ${captureId}: ${error.message}`)
+    out[table] = count ?? 0
+  }
+  return out
 }
 
 // Extract one capture into the raw layer. Idempotent: a capture is append-only
@@ -90,6 +128,29 @@ export async function extractCapture(capture: Capture): Promise<ExtractResult> {
   if (!body) {
     await setState(capture.user_id, scope, sha256('empty'))
     return { captureId: capture.id, skipped: false, rawInserted: 0, bySection, usage: emptyUsage() }
+  }
+
+  // Crash-recovery guard: if the marker is missing but raw rows for this capture
+  // already exist, a previous run died between the raw insert and setState. A fresh
+  // LLM call would reword the items into DIFFERENT content hashes and permanently
+  // append near-duplicate claims next to the originals (raw is hard append-only).
+  // Treat the existing rows as the completed extraction: set the marker and skip.
+  // (The vulnerable window is the seconds of insert time, not the minutes of model
+  // time, so a partially-inserted capture is rare; provenance is still consistent
+  // either way because every raw row carries its capture_id.)
+  const preexisting = await captureRawCounts(capture.user_id, capture.id)
+  if (Object.values(preexisting).some((n) => n > 0)) {
+    // Log the PER-TABLE shape so a suspicious partial (rows in only one of the
+    // tables a conversation would normally populate) is visible to an operator;
+    // the guard itself cannot distinguish partial from complete, and re-extracting
+    // would permanently append reworded duplicates, so recovery is the lesser harm.
+    console.warn(
+      `[miner] extract ${capture.id}: raw rows already present without a marker; recovering (no re-extraction). ` +
+        `per-table: ${JSON.stringify(preexisting)}`
+    )
+    const user = JSON.stringify({ mode: capture.mode, modality: capture.modality, body })
+    await setState(capture.user_id, scope, sha256(user))
+    return { captureId: capture.id, skipped: true, rawInserted: 0, bySection, usage: emptyUsage() }
   }
 
   const aboutLine = await resolveTargetLine(capture)

@@ -37,7 +37,7 @@ type Emit = {
   summary: string | null
 }
 type Stored = Emit
-type Current = { data: Record<string, unknown>; source_claim_ids: string[]; temporality: Emit['temporality']; confidence: number; summary: string | null }
+type Current = { label: string | null; data: Record<string, unknown>; source_claim_ids: string[]; temporality: Emit['temporality']; confidence: number; summary: string | null }
 
 function emit(id: string, claims: string[], opts: Partial<Emit> = {}): Emit {
   return {
@@ -54,6 +54,7 @@ function emit(id: string, claims: string[], opts: Partial<Emit> = {}): Emit {
 }
 
 const toCurrent = (s: Stored): Current => ({
+  label: (s as { label?: string | null }).label ?? null,
   data: s.data,
   source_claim_ids: s.source_claim_ids,
   temporality: s.temporality,
@@ -119,7 +120,7 @@ console.log('== mergeEmitted unit behaviour ==')
 {
   // a touched entity UNIONS the new claims into the existing provenance
   const current = new Map<string, Current>([
-    ['p1', { data: { aliases: ['Bob'] }, source_claim_ids: ['c1', 'c2'], temporality: 'evergreen', confidence: 0.7, summary: 'old' }],
+    ['p1', { label: null, data: { aliases: ['Bob'] }, source_claim_ids: ['c1', 'c2'], temporality: 'evergreen', confidence: 0.7, summary: 'old' }],
   ])
   const merged = mergeEmitted([emit('p1', ['c2', 'c3'], { data: { aliases: ['Bobby'] }, summary: 'new' })], current)
   const r = merged[0]
@@ -130,7 +131,7 @@ console.log('== mergeEmitted unit behaviour ==')
 {
   // a plain re-emit of the SAME claims does not grow provenance (idempotent union)
   const current = new Map<string, Current>([
-    ['p1', { data: {}, source_claim_ids: ['c1', 'c2'], temporality: 'evergreen', confidence: 0.7, summary: 's' }],
+    ['p1', { label: null, data: {}, source_claim_ids: ['c1', 'c2'], temporality: 'evergreen', confidence: 0.7, summary: 's' }],
   ])
   const merged = mergeEmitted([emit('p1', ['c1', 'c2'])], current)
   check('re-emit of same claims => no growth', JSON.stringify([...merged[0].source_claim_ids].sort()) === JSON.stringify(['c1', 'c2']))

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { isAllowed } from '@/lib/auth/guard'
 import { getMinerState } from '@/lib/miner/state'
 import { isGithubDispatchConfigured, triggerMinerWorkflow } from '@/lib/miner/dispatch'
 import { logEvent } from '@/lib/telemetry'
@@ -52,23 +53,49 @@ export async function GET(request: Request) {
   const triggered: string[] = []
   let checked = 0
   for (const u of users) {
+    // Sweep ONLY allowlisted users (operator + active invites). auth.users also
+    // holds test residue (the inc-harness-* clone accounts, which have captures
+    // and no successful runs); without this filter, configuring the cron would
+    // dispatch a real model-billed mine for every one of them, every day.
+    if (!(await isAllowed({ id: u.id, email: u.email ?? undefined }))) continue
     checked++
     try {
       // getMinerState scopes every query by user_id, so the service-role admin
-      // client reads exactly this user's state (no cross-user bleed).
+      // client reads exactly this user's state (no cross-user bleed). A stalled
+      // zombie run no longer counts as active (heartbeat-aware), so it cannot
+      // silently suppress this sweep; and pending corrections count as work, so a
+      // filed rename/merge gets applied by the next sweep instead of waiting for
+      // unrelated captures to accumulate.
       const state = await getMinerState(admin, u.id)
-      if (!state.shouldAutoRun) continue
-      await triggerMinerWorkflow(u.id, 'auto')
-      triggered.push(u.id)
+      const dispatched = state.shouldAutoRun
+      if (dispatched) {
+        await triggerMinerWorkflow(u.id, 'auto')
+        triggered.push(u.id)
+      }
+      // Heartbeat: one event per user per sweep, EVEN WHEN NOTHING IS DISPATCHED.
+      // Before this, a sweep that did nothing left no trace anywhere, so "the cron
+      // is dead" and "nothing was over threshold" were indistinguishable (the
+      // audit could not tell whether the cron had ever fired).
       await logEvent({
         user_id: u.id,
-        event_type: 'miner_run_triggered',
-        name: 'cron',
-        attrs: { trigger: 'auto', source: 'cron', new_captures: state.newCaptures, threshold: state.threshold },
+        event_type: 'cron_sweep',
+        name: dispatched ? 'dispatched' : 'skipped',
+        attrs: {
+          new_captures: state.newCaptures,
+          pending_corrections: state.pendingCorrections,
+          threshold: state.threshold,
+          active_run: Boolean(state.active),
+        },
       })
     } catch (e) {
       // one user's failure must not abort the sweep
       console.error('[cron/miner-sweep] user', u.id, e instanceof Error ? e.message : e)
+      await logEvent({
+        user_id: u.id,
+        event_type: 'cron_sweep',
+        name: 'error',
+        attrs: { error: e instanceof Error ? e.message.slice(0, 300) : String(e) },
+      })
     }
   }
 

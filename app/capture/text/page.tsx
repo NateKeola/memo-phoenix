@@ -1,6 +1,6 @@
 import { PageHeader } from '@/components/page-header'
 import { requireAllowedUser } from '@/lib/auth/guard'
-import { addTextCapture } from './actions'
+import { CaptureTextForm } from '@/components/capture-text-form'
 
 export default async function AddTextPage({
   searchParams,
@@ -20,16 +20,7 @@ export default async function AddTextPage({
       {ok ? <p className="mp-ok mp-rise" style={{ marginTop: 14 }}>Captured.</p> : null}
       {error ? <p className="mp-bad mp-rise" style={{ marginTop: 14 }}>{error}</p> : null}
 
-      <form action={addTextCapture} style={{ display: 'grid', gap: 12, marginTop: 18 }}>
-        <textarea name="body" rows={8} placeholder="What's on your mind?" required className="mp-textarea" />
-        <input
-          name="routing_hint"
-          type="text"
-          placeholder="optional hint (e.g. work, personal, gift list)"
-          className="mp-input"
-        />
-        <button type="submit" className="mp-btn mp-btn--primary mp-btn--block">Capture</button>
-      </form>
+      <CaptureTextForm />
     </main>
   )
 }

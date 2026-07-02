@@ -4,21 +4,45 @@ import { headers } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import { resolveSiteUrl } from '@/lib/auth/operator'
 import { normalizeEmail, isValidEmail, isInvited } from '@/lib/invites'
+import { createAdminClient } from '@/lib/supabase/admin'
+
+// Is this the operator's own email? MEMO_ADMIN_EMAIL when set, else the email on
+// the MEMO_USER_ID account (service-role lookup; cheap, only on this cold path).
+async function isOperatorEmail(email: string): Promise<boolean> {
+  const configured = process.env.MEMO_ADMIN_EMAIL?.trim().toLowerCase()
+  if (configured) return email === configured
+  const operatorId = process.env.MEMO_USER_ID?.trim()
+  if (!operatorId) return false
+  try {
+    const admin = createAdminClient()
+    const { data } = await admin.auth.admin.getUserById(operatorId)
+    return (data?.user?.email ?? '').trim().toLowerCase() === email
+  } catch {
+    return false
+  }
+}
 
 export type ForgotState = { ok?: boolean; message?: string; error?: string }
 
-// Self-service password recovery. The user enters their email and Supabase emails
-// them a reset link (custom SMTP is configured, so delivery is reliable). No admin in
-// the loop. Two properties hold:
+// Self-service password recovery: the user enters their email and Supabase emails a
+// reset link. ALWAYS available (the audit found the admin-only framing was a dead
+// end: there is no admin surface a locked-out user can reach). Two properties hold:
 //   1. Allowlist-scoped: a real send happens ONLY for an allowlisted address (the
-//      operator's own email or an active/non-revoked invite), so recovery cannot mint
-//      or touch a non-account.
-//   2. Enumeration-safe: the SAME neutral message is returned whether or not the email
-//      is registered/allowlisted, so the form never reveals which addresses exist.
+//      operator's own email or an active invite), so recovery cannot touch a
+//      non-account.
+//   2. Enumeration-safe: the SAME neutral message returns whether or not the email
+//      is registered or allowlisted.
 //
-// The reset link resolves to the DEPLOYED URL (resolveSiteUrl, no silent localhost)
-// and routes through /auth/callback, which establishes the recovery session (code or
-// token_hash) and forwards to /reset-password where the user sets a new password.
+// DELIVERY HONESTY: until custom SMTP is configured in Supabase (Authentication ->
+// SMTP; the live project currently has none), the built-in sender is rate-limited
+// (~2/hour) and may not deliver. The page copy tells the user what to do if no
+// email arrives (ask the operator for a direct recovery link, the /admin path,
+// which needs no email at all). Configure SMTP to make this path fully reliable.
+//
+// The link resolves to the DEPLOYED URL (resolveSiteUrl, no silent localhost) and
+// routes through /auth/callback, which establishes the session and forwards to
+// /reset-password; root landings and fragment tokens are also caught (middleware +
+// RecoveryHashCatcher), so however GoTrue shapes the link it ends at the reset page.
 export async function requestResetEmailAction(
   _prev: ForgotState,
   formData: FormData
@@ -28,13 +52,17 @@ export async function requestResetEmailAction(
 
   const neutral: ForgotState = {
     ok: true,
-    message: 'If an account exists for that email, a reset link is on its way. It can take a minute to arrive.',
+    message:
+      'If an account exists for that email, a reset link is on its way. It can take a few minutes; ' +
+      'if nothing arrives, contact your admin for a direct recovery link.',
   }
 
   // Only actually send to an allowlisted address; return the neutral message either
-  // way (no account / allowlist enumeration).
-  const operatorEmail = process.env.MEMO_ADMIN_EMAIL?.trim().toLowerCase()
-  const allowed = Boolean(operatorEmail && email === operatorEmail) || (await isInvited(email))
+  // way (no account/allowlist enumeration). The operator has no invite row, so
+  // their own address is admitted via MEMO_ADMIN_EMAIL or, when that is unset (the
+  // live deployed state), by looking up the MEMO_USER_ID account's email; without
+  // the fallback the operator's own reset silently never sent.
+  const allowed = (await isOperatorEmail(email)) || (await isInvited(email))
   if (!allowed) return neutral
 
   const h = await headers()

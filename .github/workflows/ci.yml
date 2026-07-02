@@ -23,3 +23,23 @@ jobs:
           # static analysis. No secrets are needed for CI.
           NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+
+  # The PURE offline guards (no DB, no model, no secrets). The 2026-07-01 audit
+  # found these had never run anywhere but a developer machine, despite the docs
+  # claiming "runs in CI"; now they actually do. The live guards (check-rls,
+  # check-multiuser, check-invite, check-corrections, check-companion,
+  # check-miner-isolation) need project credentials and stay operator-run.
+  guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsx scripts/check-timing.ts
+      - run: npx tsx scripts/check-incremental.ts
+      - run: npx tsx scripts/check-resolution.ts
+      - run: npx tsx scripts/check-freshness.ts
+      - run: npx tsx scripts/check-streaming.ts

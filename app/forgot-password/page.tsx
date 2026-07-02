@@ -4,10 +4,9 @@ import { ForgotPasswordForm } from '@/components/auth/forgot-password-form'
 export const dynamic = 'force-dynamic'
 
 // Self-service password recovery, linked from the sign-in screen. The user enters
-// their email and Supabase sends them a reset link (custom SMTP is configured, so
-// delivery is reliable); no admin is involved. The link lands on /reset-password
-// where they set a new password. The form is enumeration-safe (the action returns the
-// same neutral message whether or not the email is registered).
+// their email and gets a reset link that lands on /reset-password. Enumeration-safe
+// (the action returns the same neutral message either way). The admin recovery link
+// (/admin, no email involved) remains the fallback when email does not arrive.
 export default function ForgotPasswordPage() {
   return (
     <main className="mp-stage">
@@ -26,7 +25,12 @@ export default function ForgotPasswordPage() {
 
         <ForgotPasswordForm />
 
-        <p className="mp-meta" style={{ marginTop: 22, textAlign: 'center' }}>
+        <p className="mp-meta" style={{ marginTop: 18, textAlign: 'center', maxWidth: 380 }}>
+          Email can take a few minutes. If nothing arrives, contact your admin; they can generate a
+          direct recovery link for you that does not depend on email at all.
+        </p>
+
+        <p className="mp-meta" style={{ marginTop: 18, textAlign: 'center' }}>
           <Link href="/login" className="mp-link">Back to sign in</Link>
         </p>
       </div>

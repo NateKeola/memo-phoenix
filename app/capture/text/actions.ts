@@ -14,6 +14,12 @@ export async function addTextCapture(formData: FormData): Promise<void> {
 
   const { supabase, user } = await requireAllowedUser()
 
-  await writeCapture(supabase, user.id, { mode: 'text', modality: 'text', body, routingHint })
+  try {
+    await writeCapture(supabase, user.id, { mode: 'text', modality: 'text', body, routingHint })
+  } catch (e) {
+    // surface a clear form error (e.g. the too-large guard) rather than a crash
+    const msg = e instanceof Error ? e.message.replace(/^\[capture\]\s*/, '') : String(e)
+    redirect('/capture/text?error=' + encodeURIComponent(msg))
+  }
   redirect('/capture/text?ok=1')
 }

@@ -53,8 +53,14 @@ export type CorrectionRow = { id: string; kind: string; payload: Record<string, 
 export type PeopleRewrite = {
   // normalized source label -> final survivor label (chained to a fixpoint)
   labelToFinal: Map<string, string>
-  // loser canonical id -> survivor canonical id
-  loserToSurvivor: Map<string, string>
+  // loser canonical id -> the FINAL survivor LABEL. The survivor's actual row id is
+  // resolved AFTER the people pass by looking the label up among the current rows
+  // (resolveSurvivorIds), never by hashing the label: with the stable-identity
+  // resolver active a fresh survivor label gets a random id, and the old
+  // hash-the-label shortcut is exactly what produced the live dangling
+  // superseded_by pointer (the Morgan case: the loser was retired onto a survivor
+  // id that never materialized).
+  loserToSurvivorLabel: Map<string, string>
   // fingerprint of the applied corrections, '' when there are none (busts the
   // people pass memo when a new correction is issued)
   fingerprint: string
@@ -78,13 +84,18 @@ export async function readPeopleCorrections(userId: string): Promise<CorrectionR
   })
 }
 
-function fromTo(c: CorrectionRow): { from: string; to: string } | null {
+function fromTo(c: CorrectionRow): { from: string; to: string; fromId: string } | null {
   const p = c.payload
   const from = asStr(p.from_label) || asStr(p.from)
   const to = c.kind === 'merge_people' ? asStr(p.into_label) || asStr(p.into) : asStr(p.to_label) || asStr(p.to)
   if (!from || !to) return null
   if (normalizeLabel(from) === normalizeLabel(to)) return null // no-op
-  return { from, to }
+  // The id of the row the user actually targeted (the UI stamps person_id on a
+  // rename and from_id on a merge). Preferred over recomputing an id from the
+  // label, which is only valid for label-hash ids and silently misses a row whose
+  // id was minted by the resolver.
+  const fromId = c.kind === 'merge_people' ? asStr(p.from_id) : asStr(p.person_id)
+  return { from, to, fromId }
 }
 
 // Build the people rewrite from corrections applied in created_at order. Rename
@@ -92,9 +103,12 @@ function fromTo(c: CorrectionRow): { from: string; to: string } | null {
 // Edges are chained to a fixpoint so a sequence A->B, B->C collapses A and B onto C.
 export function buildPeopleRewrite(userId: string, corrections: CorrectionRow[]): PeopleRewrite {
   const edge = new Map<string, string>() // normalized from -> to (display form)
+  const fromIds = new Map<string, string>() // normalized from -> the targeted row id
   for (const c of corrections) {
     const ft = fromTo(c)
-    if (ft) edge.set(normalizeLabel(ft.from), ft.to)
+    if (!ft) continue
+    edge.set(normalizeLabel(ft.from), ft.to)
+    if (ft.fromId) fromIds.set(normalizeLabel(ft.from), ft.fromId)
   }
 
   const resolveFinal = (startNorm: string): string => {
@@ -113,24 +127,60 @@ export function buildPeopleRewrite(userId: string, corrections: CorrectionRow[])
   const labelToFinal = new Map<string, string>()
   for (const fromNorm of edge.keys()) labelToFinal.set(fromNorm, resolveFinal(fromNorm))
 
-  // Compute loser/survivor ids through the SAME first+last identity helper the
-  // people pass uses (lockstep), so a rename's supersession targets the exact id
-  // the people pass mints. A single-token rename ("Karalea") becomes
-  // first="Karalea", last="".
-  const loserToSurvivor = new Map<string, string>()
+  // Identify each loser row: prefer the id the correction payload carries (the row
+  // the user targeted), falling back to the first+last label hash (lockstep with
+  // the people pass's non-resolver id path) for old corrections without ids. The
+  // SURVIVOR is recorded as a label only; its real row id is resolved after the
+  // people pass by resolveSurvivorIds, so supersession can never point at an id
+  // that does not exist.
+  const loserToSurvivorLabel = new Map<string, string>()
   for (const [fromNorm, finalLabel] of labelToFinal) {
+    if (normalizeLabel(finalLabel) === fromNorm) continue // chain landed back on itself
     const lf = splitName(fromNorm)
-    const sf = splitName(finalLabel)
-    const loserId = canonicalPersonId(userId, lf.first, lf.last)
-    const survivorId = canonicalPersonId(userId, sf.first, sf.last)
-    if (loserId !== survivorId) loserToSurvivor.set(loserId, survivorId)
+    const loserId = fromIds.get(fromNorm) || canonicalPersonId(userId, lf.first, lf.last)
+    loserToSurvivorLabel.set(loserId, finalLabel)
   }
 
   const fingerprint = corrections.length
     ? sha256(canonicalJson(corrections.map((c) => ({ k: c.kind, p: c.payload }))))
     : ''
 
-  return { labelToFinal, loserToSurvivor, fingerprint }
+  return { labelToFinal, loserToSurvivorLabel, fingerprint }
+}
+
+// Resolve each survivor LABEL to the actual current row that carries it, after the
+// people pass has written. A survivor that did not materialize (the model emitted
+// the person under yet another label) is logged and SKIPPED: the loser stays
+// current rather than being retired onto a dangling pointer. Idempotent and cheap.
+export async function resolveSurvivorIds(
+  userId: string,
+  loserToSurvivorLabel: Map<string, string>
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  if (loserToSurvivorLabel.size === 0) return out
+  const { data, error } = await admin()
+    .from(PEOPLE_TABLE)
+    .select('id, label')
+    .eq('user_id', userId)
+    .is('valid_to', null)
+  if (error) throw new Error(`[miner] read people for survivor resolution: ${error.message}`)
+  const byNorm = new Map<string, string>()
+  for (const r of (data ?? []) as Array<{ id: string; label: string | null }>) {
+    if (r.label) byNorm.set(normalizeLabel(r.label), String(r.id))
+  }
+  for (const [loserId, survivorLabel] of loserToSurvivorLabel) {
+    const survivorId = byNorm.get(normalizeLabel(survivorLabel))
+    if (!survivorId) {
+      console.warn(
+        `[miner] correction survivor "${survivorLabel}" has no current row after the people pass; ` +
+          `leaving loser ${loserId} current (no dangling supersession)`
+      )
+      continue
+    }
+    if (survivorId === loserId) continue
+    out.set(loserId, survivorId)
+  }
+  return out
 }
 
 // Apply the rewrite to a resolved node name: the survivor label, or the original

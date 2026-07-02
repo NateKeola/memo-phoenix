@@ -34,6 +34,25 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   const path = request.nextUrl.pathname
+
+  // Catch an auth link that landed at the APP ROOT instead of /auth/callback (a
+  // Supabase email template or dashboard-sent recovery defaults redirect_to to the
+  // site URL). Route it through the callback so the code/token actually becomes a
+  // session; a recovery lands on /reset-password (the callback also detects a
+  // recovery session from the JWT amr for bare ?code= landings). Without this the
+  // code was silently dropped by the /login redirect and the link was dead.
+  if (path === '/') {
+    const sp = request.nextUrl.searchParams
+    const code = sp.get('code')
+    const tokenHash = sp.get('token_hash')
+    const type = sp.get('type')
+    if (code || (tokenHash && type)) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/auth/callback'
+      if (!sp.get('next')) url.searchParams.set('next', type === 'recovery' ? '/reset-password' : '/')
+      return NextResponse.redirect(url)
+    }
+  }
   // /api routes self-handle auth and return JSON status (401), so don't redirect
   // them to /login; the session is still refreshed above for the route handler.
   // /not-authorized is reachable by a signed-in but not-allowlisted user (the route

@@ -61,6 +61,22 @@ export async function setOnboarded(userId: string): Promise<void> {
   if (error) throw error
 }
 
+// Look up an auth account by email (service role). Used by the revoke path to find
+// a half-onboarded account whose invite row was never linked (invited_user_id NULL,
+// the pre-password-auth invites), so revoke+re-invite can actually reset it.
+export async function findUserByEmail(
+  email: string
+): Promise<{ id: string; invited: boolean; onboarded: boolean } | null> {
+  const admin = createAdminClient()
+  const { data, error } = await admin.auth.admin.listUsers({ page: 1, perPage: 200 })
+  if (error) throw error
+  const norm = email.trim().toLowerCase()
+  const u = (data?.users ?? []).find((x) => (x.email ?? '').trim().toLowerCase() === norm)
+  if (!u) return null
+  const meta = (u.app_metadata ?? {}) as { invited?: boolean; onboarded?: boolean }
+  return { id: u.id, invited: meta.invited === true, onboarded: meta.onboarded === true }
+}
+
 // Hard-revokes an invited account that has not been used. Used by the operator's
 // revoke action so a withdrawn invite cannot later be redeemed.
 export async function deleteUser(userId: string): Promise<void> {

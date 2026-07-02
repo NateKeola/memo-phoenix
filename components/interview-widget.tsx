@@ -44,6 +44,10 @@ export function InterviewWidget() {
 
 function Interview() {
   const [phase, setPhase] = useState<Phase>('choose')
+  // for the (register-once) conversation callbacks to read the current phase and
+  // whether WE initiated the teardown
+  const phaseRef = useRef<Phase>('choose')
+  const endingRef = useRef(false)
   const [mode, setMode] = useState<Mode | null>(null)
   const [error, setError] = useState('')
   const [lines, setLines] = useState<Line[]>([])
@@ -87,6 +91,8 @@ function Interview() {
     else if (t === 'topic' && seed) setTarget({ kind: 'topic', seed })
   }, [])
 
+  phaseRef.current = phase
+
   const conversation = useConversation({
     ...diagnosticCallbacks(log, vadRef),
     onConnect: (props: { conversationId?: string }) => {
@@ -96,10 +102,16 @@ function Interview() {
       setPhase('live')
     },
     onDisconnect: (details: unknown) => {
-      // The End button drives the save flow; nothing to do here. We only LOG why the
-      // session ended (reason=user is our own teardown; reason=agent/error is a server
-      // close) so a live run shows the cause instead of silently dropping it.
       log(`onDisconnect ${describeDisconnect(details)}`)
+      // React to a disconnect we did not initiate: without this the UI showed
+      // 'Listening...' against a dead socket indefinitely (the documented
+      // ends-after-greeting failure signature). The End-button flow (endingRef)
+      // still drives the save path for our own teardown.
+      if (endingRef.current) return
+      if (phaseRef.current === 'live' || phaseRef.current === 'connecting') {
+        setError('The connection ended unexpectedly. Start again when you are ready.')
+        setPhase('error')
+      }
     },
     // Best-effort live captions; the authoritative transcript is fetched server-side at end.
     onMessage: (m: unknown) => {
@@ -122,6 +134,7 @@ function Interview() {
 
   const start = useCallback(
     async (m: Mode) => {
+      endingRef.current = false
       setError('')
       setMode(m)
       setPhase('connecting')
@@ -206,6 +219,7 @@ function Interview() {
   )
 
   const end = useCallback(async () => {
+    endingRef.current = true
     log('end() invoked by user -> endSession()')
     setPhase('saving')
     try {

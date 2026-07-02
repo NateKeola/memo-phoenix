@@ -28,6 +28,7 @@ import {
   getState,
   paginatedCollect,
   readCanonicalNodes,
+  readExcludedCaptureIds,
   round3,
   salienceFrom,
   setState,
@@ -110,7 +111,13 @@ async function readCaptureIds(userId: string): Promise<string[]> {
     .eq('user_id', userId)
     .order('created_at', { ascending: true })
   if (error) throw new Error(`[miner] incremental read captures: ${error.message}`)
-  return (data ?? []).map((r) => String((r as { id: string }).id))
+  // An excluded (retracted) capture is never a fold candidate; its already-written
+  // canonical traces are cleaned up by the next FULL recompute (readRawClaims
+  // filters its claims and retireAbsorbedRows retires fully-retracted rows).
+  const excluded = await readExcludedCaptureIds(userId)
+  return (data ?? [])
+    .map((r) => String((r as { id: string }).id))
+    .filter((id) => !excluded.has(id))
 }
 
 async function readIncorporatedSet(userId: string): Promise<Set<string>> {
@@ -162,6 +169,7 @@ async function readNewRawClaims(
       .select('id, data')
       .eq('user_id', userId)
       .in('capture_id', chunk)
+      .order('id')
     if (error) throw new Error(`[miner] incremental read ${table}: ${error.message}`)
     for (const r of data ?? []) {
       out.push({
@@ -174,6 +182,7 @@ async function readNewRawClaims(
 }
 
 type MergeRow = {
+  label: string | null
   data: Record<string, unknown>
   source_claim_ids: string[]
   temporality: TemporalClass
@@ -194,13 +203,14 @@ async function readCurrentForMerge(
     const chunk = ids.slice(i, i + 300)
     const { data, error } = await admin()
       .from(table)
-      .select('id, data, source_claim_ids, temporality, confidence, summary')
+      .select('id, label, data, source_claim_ids, temporality, confidence, summary')
       .eq('user_id', userId)
       .is('valid_to', null)
       .in('id', chunk)
     if (error) throw new Error(`[miner] incremental merge-read ${table}: ${error.message}`)
     for (const r of (data ?? []) as Array<{
       id: string
+      label: string | null
       data: Record<string, unknown> | null
       source_claim_ids: string[] | null
       temporality: TemporalClass
@@ -208,6 +218,7 @@ async function readCurrentForMerge(
       summary: string | null
     }>) {
       out.set(String(r.id), {
+        label: r.label,
         data: (r.data ?? {}) as Record<string, unknown>,
         source_claim_ids: r.source_claim_ids ?? [],
         temporality: r.temporality,
@@ -242,13 +253,21 @@ export function mergeEmitted(
     const source_claim_ids = Array.from(new Set([...ex.source_claim_ids, ...em.source_claim_ids]))
     const exAliases = uniqueStrings(ex.data.aliases)
     const emAliases = uniqueStrings(em.data.aliases)
-    const aliases = uniqueStrings([...exAliases, ...emAliases])
+    // Keep the ESTABLISHED label: with the stable-identity resolver, an alias or
+    // fuzzy match means the emitted surface form differs from the canonical label,
+    // and a new mention must not rename the entity. The emitted form is kept as an
+    // alias instead (this previously wrote em.label under a comment claiming
+    // otherwise, so a drifted mention renamed the row on every fold).
+    const label = ex.label ?? em.label
+    const aliases = uniqueStrings([
+      ...exAliases,
+      ...emAliases,
+      ...(ex.label && normalizeLabel(em.label) !== normalizeLabel(ex.label) ? [em.label] : []),
+    ])
     out.push({
       id: em.id,
       user_id: em.user_id,
-      // keep the established label: a new mention should not rename the entity (and
-      // in the default id model the labels normalize to the same id anyway).
-      label: em.label,
+      label,
       data: { ...ex.data, ...em.data, aliases },
       source_claim_ids,
       temporality: em.temporality,
@@ -271,6 +290,7 @@ type IncNodeConfig = {
   context: CanonNode[]
   newCaptureIds: string[]
   peopleRewrite?: PeopleRewrite
+  heartbeat?: () => Promise<void>
 }
 
 async function incNodePass(userId: string, cfg: IncNodeConfig): Promise<PassResult> {
@@ -281,6 +301,7 @@ async function incNodePass(userId: string, cfg: IncNodeConfig): Promise<PassResu
   const collected = await paginatedCollect({
     ctx: `${cfg.canonicalTable} (incremental)`,
     system: cfg.system,
+    heartbeat: cfg.heartbeat,
     itemsField: 'nodes',
     labelOf: (n) => asString(n.name),
     buildUser: (already, batchLimit) =>
@@ -379,7 +400,8 @@ async function incNodePass(userId: string, cfg: IncNodeConfig): Promise<PassResu
 async function incRelationshipsPass(
   userId: string,
   nodes: CanonNode[],
-  newCaptureIds: string[]
+  newCaptureIds: string[],
+  heartbeat?: () => Promise<void>
 ): Promise<PassResult> {
   const table = 'canonical_relationships'
   const claims = await readNewRawClaims(userId, 'raw_relationships', newCaptureIds)
@@ -391,6 +413,7 @@ async function incRelationshipsPass(
   const collected = await paginatedCollect({
     ctx: `${table} (incremental)`,
     system: STAGE_C_RELATIONSHIPS_PROMPT,
+    heartbeat,
     itemsField: 'edges',
     labelOf: (e) => `${asString(e.source_id) ?? ''}|${asString(e.target_id) ?? ''}|${(asString(e.relation) ?? '').toLowerCase()}`,
     buildUser: (already, batchLimit) =>
@@ -469,7 +492,13 @@ async function incRelationshipsPass(
 export type IncrementalMode = 'full' | 'incremental' | 'noop'
 
 // Returns the passes plus the mode taken, so the caller can log which path ran.
-export async function runIncrementalDerivation(userId: string): Promise<PassResult[]> {
+export async function runIncrementalDerivation(
+  userId: string,
+  onStage?: (stage: string) => Promise<void>
+): Promise<PassResult[]> {
+  const stage = async (s: string) => {
+    if (onStage) await onStage(s)
+  }
   const captures = await readCaptureIds(userId)
   const incorporated = await readIncorporatedSet(userId)
   const unincorporated = captures.filter((id) => !incorporated.has(id))
@@ -484,7 +513,7 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
 
   // --- FULL: baseline (first run on this graph) or a corrections change ---
   if (!baselineExists || correctionsChanged) {
-    const passes = await runDerivation(userId)
+    const passes = await runDerivation(userId, onStage)
     await markIncorporated(userId, captures)
     await setState(userId, CORR_FP_SCOPE, peopleRewrite.fingerprint)
     await logEvent({
@@ -504,6 +533,7 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
 
   // --- NO-OP: nothing new. Keep decay anchors / salience current (cheap), else idle.
   if (unincorporated.length === 0) {
+    await stage('freshness')
     const claimDates = await loadClaimDates(userId)
     const recon = await reconcileFreshness(userId, claimDates)
     await logEvent({
@@ -518,28 +548,40 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
   // --- INCREMENTAL: fold in only the unincorporated captures ---
   const results: PassResult[] = []
 
+  // EVERY resolution pass receives the EXISTING same-table canonical nodes as
+  // context (the design requirement in docs/incremental-miner.md: "feed them plus
+  // the existing canonical nodes as context"). Without it the model sees only the
+  // new captures' claims, cannot know that "Lisa" is the established "Lisa
+  // Hennessy", and re-mints known entities as near-duplicates, which is exactly
+  // what the 2026-07-01 fold did in production. The context is read BEFORE the
+  // pass runs, so it reflects the pre-fold graph.
+
   // Stage A: people + places.
+  await stage('canonical_people (fold)')
   results.push(
     await incNodePass(userId, {
       rawTable: 'raw_people',
       canonicalTable: 'canonical_people',
       defaultTemporality: 'evergreen',
       system: STAGE_A_PEOPLE_PROMPT,
-      context: [],
+      context: await readCanonicalNodes(userId, 'canonical_people'),
       newCaptureIds: unincorporated,
       // apply the existing rewrite so a new mention of a renamed person routes to the
       // survivor id, never the superseded loser.
       peopleRewrite,
+      heartbeat: onStage ? () => onStage('canonical_people (fold)') : undefined,
     })
   )
+  await stage('canonical_places_orgs (fold)')
   results.push(
     await incNodePass(userId, {
       rawTable: 'raw_places_orgs',
       canonicalTable: 'canonical_places_orgs',
       defaultTemporality: 'evergreen',
       system: STAGE_A_PLACES_ORGS_PROMPT,
-      context: [],
+      context: await readCanonicalNodes(userId, 'canonical_places_orgs'),
       newCaptureIds: unincorporated,
+      heartbeat: onStage ? () => onStage('canonical_places_orgs (fold)') : undefined,
     })
   )
 
@@ -548,35 +590,43 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
     ...(await readCanonicalNodes(userId, 'canonical_places_orgs')),
   ]
 
-  // Stage B: projects, events, facts.
+  // Stage B: projects, events, facts. Context = the resolved A nodes plus the
+  // existing same-table nodes, so a new mention of a known project/event/fact
+  // resolves onto it instead of minting a variant.
+  await stage('canonical_projects (fold)')
   results.push(
     await incNodePass(userId, {
       rawTable: 'raw_projects',
       canonicalTable: 'canonical_projects',
       defaultTemporality: 'decaying',
       system: STAGE_B_PROJECTS_PROMPT,
-      context: aNodes,
+      context: [...aNodes, ...(await readCanonicalNodes(userId, 'canonical_projects'))],
       newCaptureIds: unincorporated,
+      heartbeat: onStage ? () => onStage('canonical_projects (fold)') : undefined,
     })
   )
+  await stage('canonical_events (fold)')
   results.push(
     await incNodePass(userId, {
       rawTable: 'raw_events',
       canonicalTable: 'canonical_events',
       defaultTemporality: 'dated',
       system: STAGE_B_EVENTS_PROMPT,
-      context: aNodes,
+      context: [...aNodes, ...(await readCanonicalNodes(userId, 'canonical_events'))],
       newCaptureIds: unincorporated,
+      heartbeat: onStage ? () => onStage('canonical_events (fold)') : undefined,
     })
   )
+  await stage('canonical_facts (fold)')
   results.push(
     await incNodePass(userId, {
       rawTable: 'raw_facts',
       canonicalTable: 'canonical_facts',
       defaultTemporality: 'evergreen',
       system: STAGE_B_FACTS_PROMPT,
-      context: [],
+      context: await readCanonicalNodes(userId, 'canonical_facts'),
       newCaptureIds: unincorporated,
+      heartbeat: onStage ? () => onStage('canonical_facts (fold)') : undefined,
     })
   )
 
@@ -587,21 +637,27 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
   for (const t of ['canonical_people', 'canonical_places_orgs', 'canonical_projects', 'canonical_events', 'canonical_facts']) {
     allNodes.push(...(await readCanonicalNodes(userId, t)))
   }
-  results.push(await incRelationshipsPass(userId, allNodes, unincorporated))
+  await stage('canonical_relationships (fold)')
+  results.push(
+    await incRelationshipsPass(userId, allNodes, unincorporated, onStage ? () => onStage('canonical_relationships (fold)') : undefined)
+  )
+  await stage('canonical_commitments (fold)')
   results.push(
     await incNodePass(userId, {
       rawTable: 'raw_commitments',
       canonicalTable: 'canonical_commitments',
       defaultTemporality: 'dated',
       system: STAGE_C_COMMITMENTS_PROMPT,
-      context: aNodes,
+      context: [...aNodes, ...(await readCanonicalNodes(userId, 'canonical_commitments'))],
       newCaptureIds: unincorporated,
+      heartbeat: onStage ? () => onStage('canonical_commitments (fold)') : undefined,
     })
   )
 
   // Freshness tail: supersede from the NEW captures' discrepancies (idempotent,
   // claim-id-keyed), then reconcile anchors + graph-based salience (whole-layer,
   // writes only diffs, no LLM, cheap).
+  await stage('freshness')
   const claimDates = await loadClaimDates(userId)
   const perTable = results
     .filter((p) => p.discrepancyItems && p.discrepancyItems.length)

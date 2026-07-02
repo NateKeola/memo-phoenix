@@ -56,10 +56,12 @@ export function MinerControl() {
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ trigger }),
         })
-        const j = (await res.json().catch(() => ({}))) as { status?: string; error?: string }
+        const j = (await res.json().catch(() => ({}))) as { status?: string; error?: string; hint?: string }
         if (j.status === 'already_running') setNote('A run is already in progress.')
         else if (j.status === 'skipped') setNote('')
         else if (j.status === 'dispatched') setNote('Run started off-machine. It will appear below shortly.')
+        else if (j.status === 'needs_offload')
+          setNote(j.hint ?? 'This update is too large to run inside the app; the off-machine runner is not configured.')
         else if (j.status === 'done') setNote('Run complete.')
         else if (j.status === 'error') setNote(`Run failed: ${j.error ?? 'unknown error'}`)
         else setNote('')
@@ -102,6 +104,7 @@ export function MinerControl() {
                 <div className="mp-row__title" style={{ fontSize: 17 }}>Updating your memory...</div>
                 <div className="mp-meta" style={{ marginTop: 4 }}>
                   started {relative(active.started_at)}, {TRIGGER_LABEL[active.trigger] ?? active.trigger}
+                  {active.stage ? ` \u00b7 working on ${active.stage}` : ''}
                 </div>
               </>
             ) : (
@@ -134,6 +137,12 @@ export function MinerControl() {
           {state.newCaptures} new {state.newCaptures === 1 ? 'note' : 'notes'} since the last update. Memo
           updates once a day when there are at least {state.threshold}, or run it now.
         </p>
+        {state.pendingCorrections > 0 ? (
+          <p className="mp-meta" style={{ margin: '0 0 8px' }}>
+            {state.pendingCorrections} {state.pendingCorrections === 1 ? 'correction is' : 'corrections are'} waiting
+            to apply; the next update will fold {state.pendingCorrections === 1 ? 'it' : 'them'} in.
+          </p>
+        ) : null}
         <div className="mp-progress">
           <div className={`mp-progress__fill${state.shouldAutoRun ? ' mp-progress__fill--ready' : ''}`} style={{ width: `${pct}%` }} />
         </div>
@@ -173,7 +182,10 @@ function LedgerLine({ run }: { run: LedgerRun }) {
         <span style={{ alignSelf: 'flex-start', fontSize: 11, letterSpacing: '0.06em', background: 'var(--surf-2)', color: 'var(--txt-faint)', padding: '4px 8px', borderRadius: 6 }}>{trigger}</span>
       </span>
       <span style={{ textAlign: 'right', fontSize: 14, color: statusColor(run.status) }}>
-        {run.status === 'running' ? 'in progress' : null}
+        {run.status === 'running' ? `in progress${run.stage ? ` (${run.stage})` : ''}` : null}
+        {run.status === 'stalled'
+          ? `stopped responding${run.stage ? ` in ${run.stage}` : ''}; will be cleaned up automatically`
+          : null}
         {run.status === 'error' ? `failed${run.error ? `: ${run.error.slice(0, 80)}` : ''}` : null}
         {run.status === 'done'
           ? run.changes
@@ -187,6 +199,6 @@ function LedgerLine({ run }: { run: LedgerRun }) {
 
 function statusColor(s: string): string {
   if (s === 'done') return 'var(--ok)'
-  if (s === 'error') return 'var(--record-soft)'
+  if (s === 'error' || s === 'stalled') return 'var(--record-soft)'
   return 'var(--accent-deep)'
 }

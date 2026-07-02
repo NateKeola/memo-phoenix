@@ -3,9 +3,9 @@
 import { useActionState } from 'react'
 import { requestResetEmailAction, type ForgotState } from '@/app/forgot-password/actions'
 
-// The self-service email-recovery form (the real recovery path). Submitting emails a
-// reset link via Supabase (custom SMTP is configured). It returns a neutral message
-// and never reveals whether an account exists.
+// The self-service email-recovery form. Submitting emails a reset link via Supabase
+// (reliable once custom SMTP is configured; the page copy covers the fallback). It
+// returns a neutral message and never reveals whether an account exists.
 export function ForgotPasswordForm() {
   const [state, action, pending] = useActionState<ForgotState, FormData>(requestResetEmailAction, {})
 

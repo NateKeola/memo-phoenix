@@ -170,6 +170,20 @@ it mints nothing, so it cannot create an un-allowlisted account. The operator-me
 `generateLink({type:'recovery'})`, no email) remains as an unused operator fallback. No
 new table, no RLS change; `disable_signup` stays `true`.
 
+### Allowlist write-scope hardening (2026-07-01, `fix-audit-findings`)
+
+The audit found a defense-in-depth gap: the `invites` RLS policies allow any
+authenticated user to INSERT rows scoped to their own user_id, while `isInvited()`
+matched by email alone, so an already-invited user holding the anon key could append
+an invites row and allowlist an arbitrary address. `isInvited()` now requires the
+invite row to be OWNED BY THE OPERATOR (`MEMO_USER_ID`); with that env unset it
+falls back to email-only matching with a logged warning. The RLS policies are
+unchanged (the operator writes invites through their own RLS client). Also in that
+pass: `revokeInviteAction` can now delete a half-onboarded account whose invite row
+was never linked (guarded to accounts with invited=true and onboarded!=true), and
+the recovery surface gained root-landing/fragment-token catches (see the decision
+log). No table or policy change; `disable_signup` stays `true`.
+
 ### What B2 must change to allow invite-only access (NOT done here)
 
 - Supabase Auth: keep `disable_signup: true`. Create each beta user with the admin
