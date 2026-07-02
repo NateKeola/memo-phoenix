@@ -12,6 +12,7 @@ import {
   useInterviewDebug,
   useLiveStatus,
 } from '@/components/interview-debug'
+import { acquireMic, releaseStream, describeMicError } from '@/lib/media/mic'
 
 type Phase = 'intro' | 'connecting' | 'live' | 'closing' | 'saving' | 'error' | 'not-captured'
 type Line = { role: string; text: string }
@@ -173,17 +174,16 @@ function Inner() {
     }, 20000)
     try {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        // Confirm permission, then RELEASE the device so the ElevenLabs SDK owns it
+        // (a leftover probe stream held the mic and starved the SDK's capture);
+        // acquireMic also reports an in-app browser / insecure context clearly.
+        const stream = await acquireMic()
         const t = stream.getAudioTracks()[0]
         log(`mic permission granted: tracks=${stream.getAudioTracks().length} state=${t?.readyState} enabled=${t?.enabled} muted=${t?.muted}`)
+        releaseStream(stream)
       } catch (e) {
-        const name = (e as DOMException)?.name
-        log(`getUserMedia failed: ${name ?? (e instanceof Error ? e.message : String(e))}`)
-        throw new Error(
-          name === 'NotAllowedError'
-            ? 'Microphone access denied. Enable the mic in your browser settings and try again.'
-            : `Microphone unavailable: ${e instanceof Error ? e.message : String(e)}`
-        )
+        log(`getUserMedia failed: ${e instanceof Error ? e.message : String(e)}`)
+        throw e instanceof Error ? e : new Error(describeMicError(e))
       }
       log('POST /api/interview/start (onboarding)')
       const res = await fetch('/api/interview/start', {
