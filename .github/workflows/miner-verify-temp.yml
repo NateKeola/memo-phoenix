@@ -1,0 +1,35 @@
+# TEMPORARY: the data-repair verification mine, running THIS BRANCH's miner code
+# (workflow_dispatch is not possible with the repo's fine-grained PAT, and
+# repository_dispatch would run main's code). Triggered narrowly by the
+# .verify-mine-trigger file so ordinary commits to the branch do not mine.
+# DELETE THIS FILE once the repair is verified (before merge).
+name: Verify miner (branch, temporary)
+
+on:
+  push:
+    branches: [fix-audit-findings]
+    paths: ['.verify-mine-trigger']
+
+concurrency:
+  group: miner-691c75b5-a140-49b2-aa63-26e5193e2984
+  cancel-in-progress: false
+
+jobs:
+  mine:
+    runs-on: ubuntu-latest
+    env:
+      MEMO_USER_ID: 691c75b5-a140-49b2-aa63-26e5193e2984
+      MINER_RUNTIME: github
+      MINER_TRIGGER: manual
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      MINER_INCREMENTAL: '1'
+      MINER_MODEL: ${{ secrets.MINER_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run miner
