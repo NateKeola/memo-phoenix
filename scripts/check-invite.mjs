@@ -122,14 +122,22 @@ async function main() {
     const bad = await authAnon('POST', 'token?grant_type=password', { email: EMAIL, password: 'Wrong-passw0rd!' })
     check('wrong password is rejected', bad.status >= 400 && !(bad.data && bad.data.access_token), `status ${bad.status}`)
 
-    // 5) allowlist contract over invites (mirrors lib/invites.isInvited).
-    const ins = await rest('POST', 'invites', { user_id: userId, email: EMAIL, status: 'pending' }, 'return=representation')
+    // 5) allowlist contract over invites (mirrors lib/invites.isInvited, which as of
+    //    the 2026-07-01 hardening only counts rows OWNED BY THE OPERATOR
+    //    (MEMO_USER_ID), closing the any-authenticated-user-can-allowlist gap).
+    const OPERATOR = (process.env.MEMO_USER_ID || '').trim()
+    check('MEMO_USER_ID is set (the operator owner the allowlist requires)', !!OPERATOR)
+    // an OPERATOR-owned invite admits...
+    const ins = await rest('POST', 'invites', { user_id: OPERATOR || userId, email: EMAIL, status: 'pending' }, 'return=representation')
     const inviteId = Array.isArray(ins.data) ? ins.data[0] && ins.data[0].id : ins.data && ins.data.id
-    check('invite row created (allowlist entry)', !!inviteId, `status ${ins.status} ${JSON.stringify(ins.data).slice(0, 160)}`)
-    const q1 = await rest('GET', `invites?select=id&email=eq.${ENC}&status=neq.revoked`)
-    check('allowlist admits a pending invite (isInvited = true)', Array.isArray(q1.data) && q1.data.length === 1, JSON.stringify(q1.data))
+    check('operator-owned invite row created (allowlist entry)', !!inviteId, `status ${ins.status} ${JSON.stringify(ins.data).slice(0, 160)}`)
+    const q1 = await rest('GET', `invites?select=id&email=eq.${ENC}&status=neq.revoked&user_id=eq.${OPERATOR || userId}`)
+    check('allowlist admits a pending operator-owned invite (isInvited = true)', Array.isArray(q1.data) && q1.data.length === 1, JSON.stringify(q1.data))
+    // ...a NON-operator-owned row does NOT (the exact query shape isInvited uses)
+    const q1b = await rest('GET', `invites?select=id&email=eq.${ENC}&status=neq.revoked&user_id=eq.${userId}`)
+    check('a non-operator-owned invite row does NOT admit (gap closed)', Array.isArray(q1b.data) && q1b.data.length === 0, JSON.stringify(q1b.data))
     if (inviteId) await rest('PATCH', `invites?id=eq.${inviteId}`, { status: 'revoked' })
-    const q2 = await rest('GET', `invites?select=id&email=eq.${ENC}&status=neq.revoked`)
+    const q2 = await rest('GET', `invites?select=id&email=eq.${ENC}&status=neq.revoked&user_id=eq.${OPERATOR || userId}`)
     check('allowlist rejects a revoked invite (isInvited = false)', Array.isArray(q2.data) && q2.data.length === 0, JSON.stringify(q2.data))
   }
 
