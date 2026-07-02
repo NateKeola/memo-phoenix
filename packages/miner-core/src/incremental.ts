@@ -169,6 +169,7 @@ async function readNewRawClaims(
       .select('id, data')
       .eq('user_id', userId)
       .in('capture_id', chunk)
+      .order('id')
     if (error) throw new Error(`[miner] incremental read ${table}: ${error.message}`)
     for (const r of data ?? []) {
       out.push({

@@ -53,10 +53,14 @@ export async function readRawClaims(
   // (and its input hash, which busts the memo when an exclusion is added) sees
   // only admissible evidence.
   const excluded = await readExcludedCaptureIds(userId)
+  // ORDER BY id: the result feeds pass input hashes, and an unordered SELECT is
+  // nondeterministic (synchronized seq scans), which spuriously busted the memo
+  // and forced full re-derivations of unchanged tables.
   const { data, error } = await admin()
     .from(table)
     .select('id, data, capture_id')
     .eq('user_id', userId)
+    .order('id')
   if (error) throw new Error(`[miner] read ${table}: ${error.message}`)
   return (data ?? [])
     .filter((r) => !excluded.has(String((r as { capture_id: string }).capture_id)))
@@ -76,11 +80,14 @@ export type CanonNode = {
 }
 
 export async function readCanonicalNodes(userId: string, table: string): Promise<CanonNode[]> {
+  // ORDER BY id: this feeds pass input hashes as context (same determinism
+  // requirement as readRawClaims above).
   const { data, error } = await admin()
     .from(table)
     .select('id, label, data, summary, source_claim_ids')
     .eq('user_id', userId)
     .is('valid_to', null)
+    .order('id')
   if (error) throw new Error(`[miner] read ${table}: ${error.message}`)
   return (data ?? []).map((r) => {
     const row = r as {
