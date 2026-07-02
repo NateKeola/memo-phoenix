@@ -147,7 +147,7 @@ export async function mineWithLock(
   // Reclaim a stale run before trying to acquire. Staleness is heartbeat-based
   // (isRunStale): a beating run keeps its lock however long it takes; a silent one
   // is closed with an honest error instead of hanging as a zombie.
-  const { data: active } = await db
+  let { data: active, error: activeErr } = await db
     .from('miner_runs')
     .select('id, started_at, heartbeat_at, stage')
     .eq('user_id', userId)
@@ -155,6 +155,20 @@ export async function mineWithLock(
     .order('started_at', { ascending: false })
     .limit(1)
     .maybeSingle()
+  if (activeErr) {
+    // Pre-0017 DB (heartbeat columns absent): fall back to the legacy shape so a
+    // genuine zombie can still be reclaimed (started_at staleness) instead of
+    // blocking every future run behind already_running.
+    const legacy = await db
+      .from('miner_runs')
+      .select('id, started_at')
+      .eq('user_id', userId)
+      .eq('status', 'running')
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    active = legacy.data as typeof active
+  }
   if (active) {
     if (!isRunStale(active as { started_at: string; heartbeat_at?: string | null }, Date.now())) {
       return { status: 'already_running' }

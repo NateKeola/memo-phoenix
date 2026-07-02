@@ -163,6 +163,10 @@ export async function paginatedCollect(opts: {
   // build the user message given what was already emitted + the batch cap
   buildUser: (alreadyEmitted: string[], batchLimit: number) => string
   validate?: (batchItems: Array<Record<string, unknown>>) => void
+  // called before EVERY model call so the run heartbeat stays fresher than the
+  // staleness threshold even inside a long multi-batch pass (a pass-entry-only
+  // beat left a multi-page pass silent long enough to be falsely reclaimed)
+  heartbeat?: () => Promise<void>
 }): Promise<PaginatedCollect> {
   const items: Array<Record<string, unknown>> = []
   const seen = new Set<string>()
@@ -180,6 +184,7 @@ export async function paginatedCollect(opts: {
     let out: Record<string, unknown> | null = null
     let lastErr: unknown = null
     for (let attempt = 1; attempt <= MAX_BATCH_ATTEMPTS; attempt++) {
+      if (opts.heartbeat) await opts.heartbeat()
       const res = await callClaude(opts.system, user)
       usage = addUsage(usage, res.usage)
       try {
@@ -331,8 +336,8 @@ export async function writeCanonical(
     salience: number
     summary: string | null
   }>
-): Promise<{ inserted: number; updated: number; unchanged: number }> {
-  if (rows.length === 0) return { inserted: 0, updated: 0, unchanged: 0 }
+): Promise<{ inserted: number; updated: number; unchanged: number; keptRetiredIds: string[] }> {
+  if (rows.length === 0) return { inserted: 0, updated: 0, unchanged: 0, keptRetiredIds: [] }
   const debug = process.env.MINER_CHURN_DEBUG === '1'
 
   const ids = rows.map((r) => r.id)
@@ -362,7 +367,7 @@ export async function writeCanonical(
   let inserted = 0
   let updated = 0
   let unchanged = 0
-  let resurrectSkipped = 0 // re-emitted rows we leave retired (validity already closed)
+  const keptRetiredIds: string[] = [] // re-emitted rows we leave retired (validity already closed)
   let fullWouldWrite = 0 // MINER_CHURN_DEBUG: what the old full signature would rewrite
   const toWrite: typeof rows = []
   for (const r of rows) {
@@ -372,8 +377,11 @@ export async function writeCanonical(
       toWrite.push(r)
     } else if (prev.superseded) {
       // The row was retired (e.g. a contradicted fact). Leave it superseded; the
-      // survivor carries the truth. Do not resurrect or rewrite it.
-      resurrectSkipped++
+      // survivor carries the truth. Do not resurrect or rewrite it. REPORTED to the
+      // caller: a kept-retired row must not count as a live attribution target for
+      // retirement (an emitted-but-skipped row could otherwise absorb a LIVE row's
+      // evidence and retire it onto a retired successor).
+      keptRetiredIds.push(r.id)
     } else if (prev.change !== changeSignature(r)) {
       updated++
       toWrite.push(r)
@@ -392,10 +400,10 @@ export async function writeCanonical(
   if (debug) {
     console.log(
       `[churn] ${table}: provenance-sig writes=${toWrite.length} ` +
-        `(ins ${inserted}/upd ${updated}/unchanged ${unchanged}/retired-kept ${resurrectSkipped}); old full-sig would write=${fullWouldWrite}`
+        `(ins ${inserted}/upd ${updated}/unchanged ${unchanged}/retired-kept ${keptRetiredIds.length}); old full-sig would write=${fullWouldWrite}`
     )
   }
-  return { inserted, updated, unchanged }
+  return { inserted, updated, unchanged, keptRetiredIds }
 }
 
 // ---- retirement (the convergence path) ---------------------------------------
@@ -425,9 +433,17 @@ export async function retireAbsorbedRows(
   userId: string,
   table: string,
   emitted: Array<{ id: string; source_claim_ids: string[] }>,
-  excludedClaimIds: Set<string>
-): Promise<number> {
-  if (process.env.MINER_RETIRE_ABSORBED === '0') return 0
+  excludedClaimIds: Set<string>,
+  // ids writeCanonical KEPT RETIRED (an emitted row whose id was already
+  // superseded). Those rows are not live, so their claims must not count as
+  // attributed and they can never be a successor; without this exclusion a
+  // relation-wording oscillation (same endpoints, flipped verb) could retire the
+  // LIVE edge onto a retired one and remove the relationship from the current
+  // graph entirely.
+  keptRetiredIds: Set<string> = new Set()
+): Promise<{ retired: number; mapping: Map<string, string | null> }> {
+  const none = { retired: 0, mapping: new Map<string, string | null>() }
+  if (process.env.MINER_RETIRE_ABSORBED === '0') return none
 
   const { data, error } = await admin()
     .from(table)
@@ -439,11 +455,12 @@ export async function retireAbsorbedRows(
     id: String((r as { id: string }).id),
     claims: ((r as { source_claim_ids: string[] | null }).source_claim_ids ?? []) as string[],
   }))
-  if (current.length === 0) return 0
+  if (current.length === 0) return none
 
-  const emittedIds = new Set(emitted.map((e) => e.id))
+  const live = emitted.filter((e) => !keptRetiredIds.has(e.id))
+  const emittedIds = new Set(live.map((e) => e.id))
   const attributed = new Set<string>()
-  for (const e of emitted) for (const c of e.source_claim_ids) attributed.add(c)
+  for (const e of live) for (const c of e.source_claim_ids) attributed.add(c)
 
   const candidates = current.filter(
     (r) =>
@@ -451,7 +468,7 @@ export async function retireAbsorbedRows(
       r.claims.length > 0 &&
       r.claims.every((c) => attributed.has(c) || excludedClaimIds.has(c))
   )
-  if (candidates.length === 0) return 0
+  if (candidates.length === 0) return none
 
   const cap = Math.max(5, Math.floor(current.length * 0.5))
   if (candidates.length > cap) {
@@ -459,16 +476,16 @@ export async function retireAbsorbedRows(
       `[miner] retirement SKIPPED for ${table}: ${candidates.length} rows qualified ` +
         `(> safety cap ${cap} of ${current.length} current); refusing a mass retirement`
     )
-    return 0
+    return none
   }
 
   const now = new Date().toISOString()
-  let retired = 0
+  const mapping = new Map<string, string | null>()
   for (const r of candidates) {
-    // the successor is the emitted row that absorbed most of this row's evidence
+    // the successor is the LIVE emitted row that absorbed most of this row's evidence
     let successor: string | null = null
     let bestOverlap = 0
-    for (const e of emitted) {
+    for (const e of live) {
       const overlap = r.claims.filter((c) => e.source_claim_ids.includes(c)).length
       if (overlap > bestOverlap) {
         bestOverlap = overlap
@@ -482,10 +499,10 @@ export async function retireAbsorbedRows(
       .eq('id', r.id)
       .is('valid_to', null)
     if (uerr) throw new Error(`[miner] retire absorbed ${table} ${r.id}: ${uerr.message}`)
-    retired++
+    mapping.set(r.id, successor)
   }
-  if (retired > 0) console.log(`[miner] ${table}: retired ${retired} absorbed/retracted row(s)`)
-  return retired
+  if (mapping.size > 0) console.log(`[miner] ${table}: retired ${mapping.size} absorbed/retracted row(s)`)
+  return { retired: mapping.size, mapping }
 }
 
 type ExistingRow = {

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import './globals.css'
+import { RecoveryHashCatcher } from '@/components/auth/recovery-hash-catcher'
 
 export const metadata = {
   title: 'Memo Phoenix',
@@ -25,7 +26,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           rel="stylesheet"
         />
       </head>
-      <body>{children}</body>
+      <body>
+        <RecoveryHashCatcher />{children}</body>
     </html>
   )
 }

@@ -60,8 +60,10 @@ export function BuildingStatus({ onboarding = false }: { onboarding?: boolean })
         if (!res.ok) return
         const j = (await res.json()) as RunStatus
         if (active && ['running', 'done', 'error', 'none', 'stalled'].includes(j.status)) {
-          // do not let a poll overwrite a needs_offload verdict from the trigger
-          setRun((prev) => (prev.status === 'needs_offload' && j.status === 'none' ? prev : j))
+          // A needs_offload verdict lives only in client state (no run row is
+          // created), so a poll that reports a STALE prior run must not overwrite
+          // it; only a genuinely live run supersedes the verdict.
+          setRun((prev) => (prev.status === 'needs_offload' && j.status !== 'running' ? prev : j))
         }
       } catch {
         // ignore a transient failure

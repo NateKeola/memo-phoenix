@@ -67,6 +67,14 @@ function Inner() {
   const heardCloseRef = useRef(false)
   // latest finalizeEnd, so the (register-once) conversation callbacks can call it
   const finalizeEndRef = useRef<null | (() => Promise<void>)>(null)
+  // Clear the pacing timers AND re-allow arming. Without this a retried session
+  // inherited the first session's clocks: the soft timer could wrap a fresh
+  // conversation minutes in, or a retry ran with no pacing at all.
+  const resetPacing = () => {
+    if (sessionSoftRef.current) clearTimeout(sessionSoftRef.current)
+    if (sessionHardRef.current) clearTimeout(sessionHardRef.current)
+    sessionTimersStartedRef.current = false
+  }
   // length-pacing refs (the soft wrap + hard backstop, set once when live)
   const phaseRef = useRef<Phase>('intro')
   const sessionSoftRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -118,6 +126,7 @@ function Inner() {
         return
       }
       if (p === 'live' || p === 'connecting') {
+        resetPacing()
         setError(
           'The connection ended unexpectedly. Nothing is lost if you barely started; press ' +
             '"Try again" to reconnect, or skip for now and set Memo up later.'
@@ -275,13 +284,22 @@ function Inner() {
   // onboarding complete (skipped=true for telemetry) and goes home.
   const skip = useCallback(async () => {
     try {
-      await fetch('/api/onboarding/complete', {
+      const res = await fetch('/api/onboarding/complete', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ skipped: true }),
       })
+      if (!res.ok) {
+        // A silent failure would bounce them straight back here via the middleware
+        // gate with zero feedback; say what happened instead.
+        setError('Could not skip right now (the server rejected it). Try again in a moment.')
+        setPhase('error')
+        return
+      }
     } catch {
-      // even if the flag write fails, take them home; the middleware will re-offer
+      setError('Could not skip right now (network problem). Try again in a moment.')
+      setPhase('error')
+      return
     }
     router.push('/')
   }, [router])
@@ -403,7 +421,7 @@ function Inner() {
         <div style={{ display: 'grid', gap: 10, maxWidth: 460, marginTop: 8 }}>
           <p className="mp-bad" style={{ margin: 0 }}>{error}</p>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            <button type="button" className="mp-btn mp-btn--ghost" onClick={() => { endingRef.current = false; setPhase('intro') }}>
+            <button type="button" className="mp-btn mp-btn--ghost" onClick={() => { endingRef.current = false; resetPacing(); setPhase('intro') }}>
               Try again
             </button>
             <button type="button" className="mp-link" style={{ background: 'none', border: 0, cursor: 'pointer', fontSize: 14 }} onClick={() => void skip()}>
@@ -419,7 +437,7 @@ function Inner() {
             That conversation was too short to capture, so Memo has nothing to build from yet.
           </p>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            <button type="button" className="mp-btn mp-btn--primary" onClick={() => { endingRef.current = false; setPhase('intro') }}>
+            <button type="button" className="mp-btn mp-btn--primary" onClick={() => { endingRef.current = false; resetPacing(); setPhase('intro') }}>
               Try the conversation again
             </button>
             <button type="button" className="mp-link" style={{ background: 'none', border: 0, cursor: 'pointer', fontSize: 14 }} onClick={() => void skip()}>

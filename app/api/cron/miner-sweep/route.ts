@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { isAllowed } from '@/lib/auth/guard'
 import { getMinerState } from '@/lib/miner/state'
 import { isGithubDispatchConfigured, triggerMinerWorkflow } from '@/lib/miner/dispatch'
 import { logEvent } from '@/lib/telemetry'
@@ -52,6 +53,11 @@ export async function GET(request: Request) {
   const triggered: string[] = []
   let checked = 0
   for (const u of users) {
+    // Sweep ONLY allowlisted users (operator + active invites). auth.users also
+    // holds test residue (the inc-harness-* clone accounts, which have captures
+    // and no successful runs); without this filter, configuring the cron would
+    // dispatch a real model-billed mine for every one of them, every day.
+    if (!(await isAllowed({ id: u.id, email: u.email ?? undefined }))) continue
     checked++
     try {
       // getMinerState scopes every query by user_id, so the service-role admin

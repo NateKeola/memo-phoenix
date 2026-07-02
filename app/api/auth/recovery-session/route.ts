@@ -12,6 +12,16 @@ export const runtime = 'nodejs'
 // this exact purpose) and validate them with getUser before confirming, then the
 // client continues to /reset-password.
 export async function POST(request: NextRequest) {
+  // Same-origin check: this unauthenticated endpoint SETS session cookies, so a
+  // cross-site POST (login-CSRF: an attacker logging the victim's browser into an
+  // attacker-controlled recovery session) must be rejected. The catcher always
+  // calls same-origin, so a mismatched or missing Origin is never legitimate.
+  const origin = request.headers.get('origin')
+  const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host')
+  if (!origin || !host || new URL(origin).host !== host) {
+    return NextResponse.json({ error: 'cross-origin request rejected' }, { status: 403 })
+  }
+
   const body = (await request.json().catch(() => ({}))) as {
     access_token?: string
     refresh_token?: string

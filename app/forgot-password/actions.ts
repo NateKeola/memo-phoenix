@@ -4,6 +4,23 @@ import { headers } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import { resolveSiteUrl } from '@/lib/auth/operator'
 import { normalizeEmail, isValidEmail, isInvited } from '@/lib/invites'
+import { createAdminClient } from '@/lib/supabase/admin'
+
+// Is this the operator's own email? MEMO_ADMIN_EMAIL when set, else the email on
+// the MEMO_USER_ID account (service-role lookup; cheap, only on this cold path).
+async function isOperatorEmail(email: string): Promise<boolean> {
+  const configured = process.env.MEMO_ADMIN_EMAIL?.trim().toLowerCase()
+  if (configured) return email === configured
+  const operatorId = process.env.MEMO_USER_ID?.trim()
+  if (!operatorId) return false
+  try {
+    const admin = createAdminClient()
+    const { data } = await admin.auth.admin.getUserById(operatorId)
+    return (data?.user?.email ?? '').trim().toLowerCase() === email
+  } catch {
+    return false
+  }
+}
 
 export type ForgotState = { ok?: boolean; message?: string; error?: string }
 
@@ -41,9 +58,11 @@ export async function requestResetEmailAction(
   }
 
   // Only actually send to an allowlisted address; return the neutral message either
-  // way (no account/allowlist enumeration).
-  const operatorEmail = process.env.MEMO_ADMIN_EMAIL?.trim().toLowerCase()
-  const allowed = Boolean(operatorEmail && email === operatorEmail) || (await isInvited(email))
+  // way (no account/allowlist enumeration). The operator has no invite row, so
+  // their own address is admitted via MEMO_ADMIN_EMAIL or, when that is unset (the
+  // live deployed state), by looking up the MEMO_USER_ID account's email; without
+  // the fallback the operator's own reset silently never sent.
+  const allowed = (await isOperatorEmail(email)) || (await isInvited(email))
   if (!allowed) return neutral
 
   const h = await headers()

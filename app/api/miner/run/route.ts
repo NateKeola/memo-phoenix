@@ -61,7 +61,11 @@ export async function POST(request: NextRequest) {
     .select('id', { count: 'exact', head: true })
     .eq('user_id', targetUserId)
   const corpus = totalCaptures ?? 0
-  const inlineSafe = corpus <= INLINE_MAX_CAPTURES && process.env.MINER_USE_GITHUB_ACTION !== '1'
+  // MINER_USE_GITHUB_ACTION forces even tiny runs off-machine, but only when
+  // dispatch is actually configured; the flag without config must not dead-end a
+  // brand-new user's 1-capture onboarding mine into needs_offload.
+  const forceOffload = process.env.MINER_USE_GITHUB_ACTION === '1' && isGithubDispatchConfigured()
+  const inlineSafe = corpus <= INLINE_MAX_CAPTURES && !forceOffload
 
   if (!inlineSafe) {
     if (isGithubDispatchConfigured()) {

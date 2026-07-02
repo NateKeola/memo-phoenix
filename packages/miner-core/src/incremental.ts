@@ -181,6 +181,7 @@ async function readNewRawClaims(
 }
 
 type MergeRow = {
+  label: string | null
   data: Record<string, unknown>
   source_claim_ids: string[]
   temporality: TemporalClass
@@ -201,13 +202,14 @@ async function readCurrentForMerge(
     const chunk = ids.slice(i, i + 300)
     const { data, error } = await admin()
       .from(table)
-      .select('id, data, source_claim_ids, temporality, confidence, summary')
+      .select('id, label, data, source_claim_ids, temporality, confidence, summary')
       .eq('user_id', userId)
       .is('valid_to', null)
       .in('id', chunk)
     if (error) throw new Error(`[miner] incremental merge-read ${table}: ${error.message}`)
     for (const r of (data ?? []) as Array<{
       id: string
+      label: string | null
       data: Record<string, unknown> | null
       source_claim_ids: string[] | null
       temporality: TemporalClass
@@ -215,6 +217,7 @@ async function readCurrentForMerge(
       summary: string | null
     }>) {
       out.set(String(r.id), {
+        label: r.label,
         data: (r.data ?? {}) as Record<string, unknown>,
         source_claim_ids: r.source_claim_ids ?? [],
         temporality: r.temporality,
@@ -249,13 +252,21 @@ export function mergeEmitted(
     const source_claim_ids = Array.from(new Set([...ex.source_claim_ids, ...em.source_claim_ids]))
     const exAliases = uniqueStrings(ex.data.aliases)
     const emAliases = uniqueStrings(em.data.aliases)
-    const aliases = uniqueStrings([...exAliases, ...emAliases])
+    // Keep the ESTABLISHED label: with the stable-identity resolver, an alias or
+    // fuzzy match means the emitted surface form differs from the canonical label,
+    // and a new mention must not rename the entity. The emitted form is kept as an
+    // alias instead (this previously wrote em.label under a comment claiming
+    // otherwise, so a drifted mention renamed the row on every fold).
+    const label = ex.label ?? em.label
+    const aliases = uniqueStrings([
+      ...exAliases,
+      ...emAliases,
+      ...(ex.label && normalizeLabel(em.label) !== normalizeLabel(ex.label) ? [em.label] : []),
+    ])
     out.push({
       id: em.id,
       user_id: em.user_id,
-      // keep the established label: a new mention should not rename the entity (and
-      // in the default id model the labels normalize to the same id anyway).
-      label: em.label,
+      label,
       data: { ...ex.data, ...em.data, aliases },
       source_claim_ids,
       temporality: em.temporality,
@@ -278,6 +289,7 @@ type IncNodeConfig = {
   context: CanonNode[]
   newCaptureIds: string[]
   peopleRewrite?: PeopleRewrite
+  heartbeat?: () => Promise<void>
 }
 
 async function incNodePass(userId: string, cfg: IncNodeConfig): Promise<PassResult> {
@@ -288,6 +300,7 @@ async function incNodePass(userId: string, cfg: IncNodeConfig): Promise<PassResu
   const collected = await paginatedCollect({
     ctx: `${cfg.canonicalTable} (incremental)`,
     system: cfg.system,
+    heartbeat: cfg.heartbeat,
     itemsField: 'nodes',
     labelOf: (n) => asString(n.name),
     buildUser: (already, batchLimit) =>
@@ -386,7 +399,8 @@ async function incNodePass(userId: string, cfg: IncNodeConfig): Promise<PassResu
 async function incRelationshipsPass(
   userId: string,
   nodes: CanonNode[],
-  newCaptureIds: string[]
+  newCaptureIds: string[],
+  heartbeat?: () => Promise<void>
 ): Promise<PassResult> {
   const table = 'canonical_relationships'
   const claims = await readNewRawClaims(userId, 'raw_relationships', newCaptureIds)
@@ -398,6 +412,7 @@ async function incRelationshipsPass(
   const collected = await paginatedCollect({
     ctx: `${table} (incremental)`,
     system: STAGE_C_RELATIONSHIPS_PROMPT,
+    heartbeat,
     itemsField: 'edges',
     labelOf: (e) => `${asString(e.source_id) ?? ''}|${asString(e.target_id) ?? ''}|${(asString(e.relation) ?? '').toLowerCase()}`,
     buildUser: (already, batchLimit) =>
@@ -553,6 +568,7 @@ export async function runIncrementalDerivation(
       // apply the existing rewrite so a new mention of a renamed person routes to the
       // survivor id, never the superseded loser.
       peopleRewrite,
+      heartbeat: onStage ? () => onStage('canonical_people (fold)') : undefined,
     })
   )
   await stage('canonical_places_orgs (fold)')
@@ -564,6 +580,7 @@ export async function runIncrementalDerivation(
       system: STAGE_A_PLACES_ORGS_PROMPT,
       context: await readCanonicalNodes(userId, 'canonical_places_orgs'),
       newCaptureIds: unincorporated,
+      heartbeat: onStage ? () => onStage('canonical_places_orgs (fold)') : undefined,
     })
   )
 
@@ -584,6 +601,7 @@ export async function runIncrementalDerivation(
       system: STAGE_B_PROJECTS_PROMPT,
       context: [...aNodes, ...(await readCanonicalNodes(userId, 'canonical_projects'))],
       newCaptureIds: unincorporated,
+      heartbeat: onStage ? () => onStage('canonical_projects (fold)') : undefined,
     })
   )
   await stage('canonical_events (fold)')
@@ -595,6 +613,7 @@ export async function runIncrementalDerivation(
       system: STAGE_B_EVENTS_PROMPT,
       context: [...aNodes, ...(await readCanonicalNodes(userId, 'canonical_events'))],
       newCaptureIds: unincorporated,
+      heartbeat: onStage ? () => onStage('canonical_events (fold)') : undefined,
     })
   )
   await stage('canonical_facts (fold)')
@@ -606,6 +625,7 @@ export async function runIncrementalDerivation(
       system: STAGE_B_FACTS_PROMPT,
       context: await readCanonicalNodes(userId, 'canonical_facts'),
       newCaptureIds: unincorporated,
+      heartbeat: onStage ? () => onStage('canonical_facts (fold)') : undefined,
     })
   )
 
@@ -617,7 +637,9 @@ export async function runIncrementalDerivation(
     allNodes.push(...(await readCanonicalNodes(userId, t)))
   }
   await stage('canonical_relationships (fold)')
-  results.push(await incRelationshipsPass(userId, allNodes, unincorporated))
+  results.push(
+    await incRelationshipsPass(userId, allNodes, unincorporated, onStage ? () => onStage('canonical_relationships (fold)') : undefined)
+  )
   await stage('canonical_commitments (fold)')
   results.push(
     await incNodePass(userId, {
@@ -627,6 +649,7 @@ export async function runIncrementalDerivation(
       system: STAGE_C_COMMITMENTS_PROMPT,
       context: [...aNodes, ...(await readCanonicalNodes(userId, 'canonical_commitments'))],
       newCaptureIds: unincorporated,
+      heartbeat: onStage ? () => onStage('canonical_commitments (fold)') : undefined,
     })
   )
 

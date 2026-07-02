@@ -95,10 +95,11 @@ export type ExtractResult = {
   usage: Usage
 }
 
-// Does ANY raw table already carry rows for this capture? Used by the
-// crash-recovery guard above; only called for captures without an extract marker,
-// so the 8 head-count probes cost nothing on the steady-state path.
-async function captureHasRawRows(userId: string, captureId: string): Promise<boolean> {
+// Per-table raw-row counts for a capture. Used by the crash-recovery guard above;
+// only called for captures without an extract marker, so the 8 head-count probes
+// cost nothing on the steady-state path.
+async function captureRawCounts(userId: string, captureId: string): Promise<Record<string, number>> {
+  const out: Record<string, number> = {}
   for (const table of Object.values(SECTION_TABLE)) {
     const { count, error } = await admin()
       .from(table)
@@ -106,9 +107,9 @@ async function captureHasRawRows(userId: string, captureId: string): Promise<boo
       .eq('user_id', userId)
       .eq('capture_id', captureId)
     if (error) throw new Error(`[miner] probe ${table} for ${captureId}: ${error.message}`)
-    if ((count ?? 0) > 0) return true
+    out[table] = count ?? 0
   }
-  return false
+  return out
 }
 
 // Extract one capture into the raw layer. Idempotent: a capture is append-only
@@ -137,8 +138,16 @@ export async function extractCapture(capture: Capture): Promise<ExtractResult> {
   // (The vulnerable window is the seconds of insert time, not the minutes of model
   // time, so a partially-inserted capture is rare; provenance is still consistent
   // either way because every raw row carries its capture_id.)
-  if (await captureHasRawRows(capture.user_id, capture.id)) {
-    console.warn(`[miner] extract ${capture.id}: raw rows already present without a marker; recovering (no re-extraction)`)
+  const preexisting = await captureRawCounts(capture.user_id, capture.id)
+  if (Object.values(preexisting).some((n) => n > 0)) {
+    // Log the PER-TABLE shape so a suspicious partial (rows in only one of the
+    // tables a conversation would normally populate) is visible to an operator;
+    // the guard itself cannot distinguish partial from complete, and re-extracting
+    // would permanently append reworded duplicates, so recovery is the lesser harm.
+    console.warn(
+      `[miner] extract ${capture.id}: raw rows already present without a marker; recovering (no re-extraction). ` +
+        `per-table: ${JSON.stringify(preexisting)}`
+    )
     const user = JSON.stringify({ mode: capture.mode, modality: capture.modality, body })
     await setState(capture.user_id, scope, sha256(user))
     return { captureId: capture.id, skipped: true, rawInserted: 0, bySection, usage: emptyUsage() }
