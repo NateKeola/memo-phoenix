@@ -4,6 +4,7 @@ import { useRef, useState } from 'react'
 import { PageHeader } from '@/components/page-header'
 import { IconMic } from '@/components/icons'
 import { acquireMic, releaseStream } from '@/lib/media/mic'
+import { MicDiagnostics, type DownstreamLine } from '@/components/mic-diagnostics'
 
 type State = 'idle' | 'recording' | 'transcribing' | 'done' | 'error'
 
@@ -25,15 +26,20 @@ export default function AddMemoPage() {
   const [state, setState] = useState<State>('idle')
   const [transcript, setTranscript] = useState('')
   const [error, setError] = useState('')
+  // The live capture stream, kept in state so the diagnostics panel can meter it
+  // (show that real audio is flowing) while recording.
+  const [stream, setStream] = useState<MediaStream | null>(null)
+  const [down, setDown] = useState<DownstreamLine[]>([])
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
 
   async function start() {
     setError('')
     setTranscript('')
-    let stream: MediaStream
+    setDown([])
+    let s: MediaStream
     try {
-      stream = await acquireMic()
+      s = await acquireMic()
     } catch (e) {
       // Surface the REAL reason (in-app browser, blocked permission, no device,
       // device busy, insecure context) instead of one generic string.
@@ -41,13 +47,13 @@ export default function AddMemoPage() {
       setState('error')
       return
     }
+    setStream(s) // hand the live stream to the diagnostics meter
     let recorder: MediaRecorder
     try {
-      recorder = new MediaRecorder(stream)
+      recorder = new MediaRecorder(s)
     } catch (e) {
-      // Some browsers reject MediaRecorder / the default codec even after
-      // getUserMedia succeeds (older Safari). Release the device and report it.
-      releaseStream(stream)
+      releaseStream(s)
+      setStream(null)
       setError(
         `This browser cannot record audio (${e instanceof Error ? e.message : String(e)}). Try Safari or Chrome.`
       )
@@ -59,8 +65,14 @@ export default function AddMemoPage() {
       if (e.data.size > 0) chunksRef.current.push(e.data)
     }
     recorder.onstop = async () => {
-      releaseStream(stream)
       const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' })
+      // Downstream visibility: exactly what we send to Scribe and what comes back.
+      const sendLine: DownstreamLine = {
+        label: 'sent to Scribe',
+        value: `${blob.size} bytes, ${blob.type || 'audio/webm'}`,
+        ok: blob.size > 0,
+      }
+      setDown([sendLine])
       setState('transcribing')
       try {
         const res = await fetch(`/api/capture/memo${targetQuery()}`, {
@@ -68,13 +80,28 @@ export default function AddMemoPage() {
           headers: { 'content-type': blob.type },
           body: blob,
         })
-        const json = (await res.json()) as { transcript?: string; error?: string }
-        if (!res.ok) throw new Error(json.error || 'transcription failed')
+        const json = (await res.json().catch(() => ({}))) as { transcript?: string; error?: string }
+        setDown([
+          sendLine,
+          {
+            label: 'Scribe response',
+            value: res.ok
+              ? `${res.status} ok, ${String(json.transcript ?? '').length} chars`
+              : `${res.status} ${json.error ?? 'error'}`,
+            ok: res.ok,
+          },
+        ])
+        if (!res.ok) throw new Error(json.error || `transcription failed (${res.status})`)
         setTranscript(json.transcript ?? '')
         setState('done')
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err))
         setState('error')
+      } finally {
+        // Release the mic AFTER we have read the downstream result (the panel keeps
+        // its last reading; the meter simply goes idle).
+        releaseStream(s)
+        setStream(null)
       }
     }
     recorderRef.current = recorder
@@ -85,8 +112,6 @@ export default function AddMemoPage() {
   function stop() {
     recorderRef.current?.stop()
   }
-
-  const idle = state === 'idle' || state === 'done' || state === 'error'
 
   return (
     <main className="mp-page mp-page--flush" style={{ maxWidth: 560 }}>
@@ -157,6 +182,16 @@ export default function AddMemoPage() {
           </div>
         </div>
       ) : null}
+
+      {/* Always-on capture diagnostics: while recording, the input-level meter should
+          move when you speak. If it stays flat, the mic is delivering silence (the
+          real failure), not a permission error. */}
+      <MicDiagnostics
+        stream={stream}
+        error={error || null}
+        downstream={down}
+        note={state === 'recording' ? 'Speak now: the input level bar should move.' : undefined}
+      />
     </main>
   )
 }
