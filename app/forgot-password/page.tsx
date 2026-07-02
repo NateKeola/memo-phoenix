@@ -3,17 +3,12 @@ import { ForgotPasswordForm } from '@/components/auth/forgot-password-form'
 
 export const dynamic = 'force-dynamic'
 
-// The "forgot your password" screen the sign-in page links to. In the invite-only
-// beta, recovery is ADMIN-ASSISTED and does not depend on email delivery: the person
-// asks their admin, who generates a recovery link in /admin and sends it to them.
-// This screen states exactly what actually works, rather than a self-service form
-// that would silently fail to deliver (the built-in Supabase email sender is
-// rate-limited and unreliable). The optional self-service email form appears only
-// when the operator has enabled it (RECOVERY_EMAIL_SELF_SERVICE, needs custom SMTP).
+// Self-service password recovery, linked from the sign-in screen. The user enters
+// their email and Supabase sends them a reset link (custom SMTP is configured, so
+// delivery is reliable); no admin is involved. The link lands on /reset-password
+// where they set a new password. The form is enumeration-safe (the action returns the
+// same neutral message whether or not the email is registered).
 export default function ForgotPasswordPage() {
-  const adminEmail = process.env.MEMO_ADMIN_EMAIL?.trim()
-  const selfService = process.env.RECOVERY_EMAIL_SELF_SERVICE === '1'
-
   return (
     <main className="mp-stage">
       <div>
@@ -24,27 +19,12 @@ export default function ForgotPasswordPage() {
             aria-hidden
           />
           <h1 className="mp-h2">Forgot your password?</h1>
-        </div>
-
-        <div className="mp-card">
-          <p style={{ margin: 0 }}>
-            While Memo is in a private beta, password recovery is handled by your admin. Ask them to
-            send you a recovery link. You will open it and choose a new password. No waiting on
-            email.
+          <p className="mp-sub" style={{ marginTop: 6 }}>
+            Enter your email and we will send you a link to set a new one.
           </p>
-          {adminEmail ? (
-            <p className="mp-meta" style={{ marginTop: 12 }}>
-              Your admin: <span style={{ color: 'var(--txt)' }}>{adminEmail}</span>
-            </p>
-          ) : null}
         </div>
 
-        {selfService ? (
-          <div style={{ marginTop: 18 }}>
-            <p className="mp-eyebrow">Or email yourself a link</p>
-            <ForgotPasswordForm />
-          </div>
-        ) : null}
+        <ForgotPasswordForm />
 
         <p className="mp-meta" style={{ marginTop: 22, textAlign: 'center' }}>
           <Link href="/login" className="mp-link">Back to sign in</Link>
