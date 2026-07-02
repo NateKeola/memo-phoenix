@@ -61,6 +61,8 @@ export type PassResult = {
   // the discrepancy items themselves (not just the count), so derivation can drive
   // supersession from them. Empty for passes that emit none.
   discrepancyItems?: DiscrepancyItem[]
+  // rows retired by the absorbed-evidence rule (full derivation only; convergence)
+  retired?: number
 }
 
 export const emptyUsage = (): Usage => ({

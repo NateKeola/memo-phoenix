@@ -3,6 +3,7 @@ import {
   buildPeopleRewrite,
   readPeopleCorrections,
   repointReferences,
+  resolveSurvivorIds,
   retireStaleRelationships,
   rewriteLabel,
   supersedeLosers,
@@ -16,7 +17,9 @@ import {
   inputHash,
   paginatedCollect,
   readCanonicalNodes,
+  readExcludedClaimIds,
   readRawClaims,
+  retireAbsorbedRows,
   round3,
   salienceFrom,
   setState,
@@ -200,6 +203,16 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
   const rows = Array.from(byId.values())
   const w = await writeCanonical(userId, cfg.canonicalTable, rows)
   if (resolver) await persistAliases(userId, cfg.canonicalTable, resolver.newAliases())
+  // Convergence: a full pass re-examined EVERY admissible claim, so a current row
+  // that was not re-emitted and whose evidence was fully attributed elsewhere (or
+  // retracted via capture_exclusions) is an absorbed duplicate; retire it.
+  const excludedClaims = await readExcludedClaimIds(userId, cfg.rawTable)
+  const retired = await retireAbsorbedRows(
+    userId,
+    cfg.canonicalTable,
+    rows.map((r) => ({ id: r.id, source_claim_ids: r.source_claim_ids })),
+    excludedClaims
+  )
   await setState(userId, scope, hash)
   return {
     table: cfg.canonicalTable,
@@ -213,6 +226,7 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
     discrepancyItems: collected.discrepancyItems,
     open_threads: collected.open_threads,
     usage: collected.usage,
+    retired,
   }
 }
 
@@ -301,6 +315,13 @@ async function runRelationshipsPass(userId: string, nodes: CanonNode[]): Promise
 
   const rows = Array.from(byId.values())
   const w = await writeCanonical(userId, table, rows)
+  const excludedClaims = await readExcludedClaimIds(userId, 'raw_relationships')
+  const retired = await retireAbsorbedRows(
+    userId,
+    table,
+    rows.map((r) => ({ id: r.id, source_claim_ids: r.source_claim_ids })),
+    excludedClaims
+  )
   await setState(userId, scope, hash)
   return {
     table,
@@ -314,6 +335,7 @@ async function runRelationshipsPass(userId: string, nodes: CanonNode[]): Promise
     discrepancyItems: collected.discrepancyItems,
     open_threads: collected.open_threads + dropped, // unresolved endpoints become threads
     usage: collected.usage,
+    retired,
   }
 }
 
@@ -398,6 +420,17 @@ async function runInsightsPass(userId: string, nodes: CanonNode[]): Promise<Pass
   const rows = Array.from(byId.values())
   const w = await writeCanonical(userId, table, rows)
   if (resolver) await persistAliases(userId, table, resolver.newAliases())
+  // Insights are re-derived from the whole canonical layer each full run; a stale
+  // reworded insight whose supporting claims were re-cited by the fresh set is
+  // absorbed (this is what stops the recurring_tension pile-up). No excluded-claim
+  // set here: insight provenance spans all raw tables and the absorbed rule alone
+  // converges it.
+  const retired = await retireAbsorbedRows(
+    userId,
+    table,
+    rows.map((r) => ({ id: r.id, source_claim_ids: r.source_claim_ids })),
+    new Set<string>()
+  )
   await setState(userId, scope, hash)
   return {
     table,
@@ -411,6 +444,7 @@ async function runInsightsPass(userId: string, nodes: CanonNode[]): Promise<Pass
     discrepancyItems: collected.discrepancyItems,
     open_threads: collected.open_threads,
     usage: collected.usage,
+    retired,
   }
 }
 
@@ -470,8 +504,12 @@ export async function runDerivation(userId: string): Promise<PassResult[]> {
   await record('stage_a', aPlaces)
 
   // Retire the merged-away loser person rows BEFORE downstream context is read, so
-  // B and C never see a superseded identity. Idempotent: a no-op once applied.
-  const losersSuperseded = await supersedeLosers(userId, peopleRewrite.loserToSurvivor)
+  // B and C never see a superseded identity. The survivor id is resolved from the
+  // CURRENT rows the people pass just wrote (by label), never recomputed from a
+  // label hash; a survivor that did not materialize skips its loser (no dangling
+  // superseded_by). Idempotent: a no-op once applied.
+  const loserToSurvivor = await resolveSurvivorIds(userId, peopleRewrite.loserToSurvivorLabel)
+  const losersSuperseded = await supersedeLosers(userId, loserToSurvivor)
 
   // Resolved Stage A node set, used as reference context for B and C.
   const aNodes = [
@@ -530,8 +568,8 @@ export async function runDerivation(userId: string): Promise<PassResult[]> {
   // retired (the survivor edge was re-emitted under a new id). Label-keyed rows
   // (commitments, projects, events, insights) keep the same id across a person
   // merge, so their embedded person reference is repointed in place.
-  const relationshipsRetired = await retireStaleRelationships(userId, new Set(peopleRewrite.loserToSurvivor.keys()))
-  const referencesRepointed = await repointReferences(userId, peopleRewrite.loserToSurvivor)
+  const relationshipsRetired = await retireStaleRelationships(userId, new Set(loserToSurvivor.keys()))
+  const referencesRepointed = await repointReferences(userId, loserToSurvivor)
 
   if (corrections.length > 0) {
     await logEvent({
@@ -541,7 +579,7 @@ export async function runDerivation(userId: string): Promise<PassResult[]> {
       attrs: {
         corrections: corrections.length,
         rewrites: peopleRewrite.labelToFinal.size,
-        losers: peopleRewrite.loserToSurvivor.size,
+        losers: loserToSurvivor.size,
         losers_superseded: losersSuperseded,
         relationships_retired: relationshipsRetired,
         references_repointed: referencesRepointed,

@@ -28,6 +28,7 @@ import {
   getState,
   paginatedCollect,
   readCanonicalNodes,
+  readExcludedCaptureIds,
   round3,
   salienceFrom,
   setState,
@@ -110,7 +111,13 @@ async function readCaptureIds(userId: string): Promise<string[]> {
     .eq('user_id', userId)
     .order('created_at', { ascending: true })
   if (error) throw new Error(`[miner] incremental read captures: ${error.message}`)
-  return (data ?? []).map((r) => String((r as { id: string }).id))
+  // An excluded (retracted) capture is never a fold candidate; its already-written
+  // canonical traces are cleaned up by the next FULL recompute (readRawClaims
+  // filters its claims and retireAbsorbedRows retires fully-retracted rows).
+  const excluded = await readExcludedCaptureIds(userId)
+  return (data ?? [])
+    .map((r) => String((r as { id: string }).id))
+    .filter((id) => !excluded.has(id))
 }
 
 async function readIncorporatedSet(userId: string): Promise<Set<string>> {
@@ -518,6 +525,14 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
   // --- INCREMENTAL: fold in only the unincorporated captures ---
   const results: PassResult[] = []
 
+  // EVERY resolution pass receives the EXISTING same-table canonical nodes as
+  // context (the design requirement in docs/incremental-miner.md: "feed them plus
+  // the existing canonical nodes as context"). Without it the model sees only the
+  // new captures' claims, cannot know that "Lisa" is the established "Lisa
+  // Hennessy", and re-mints known entities as near-duplicates, which is exactly
+  // what the 2026-07-01 fold did in production. The context is read BEFORE the
+  // pass runs, so it reflects the pre-fold graph.
+
   // Stage A: people + places.
   results.push(
     await incNodePass(userId, {
@@ -525,7 +540,7 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
       canonicalTable: 'canonical_people',
       defaultTemporality: 'evergreen',
       system: STAGE_A_PEOPLE_PROMPT,
-      context: [],
+      context: await readCanonicalNodes(userId, 'canonical_people'),
       newCaptureIds: unincorporated,
       // apply the existing rewrite so a new mention of a renamed person routes to the
       // survivor id, never the superseded loser.
@@ -538,7 +553,7 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
       canonicalTable: 'canonical_places_orgs',
       defaultTemporality: 'evergreen',
       system: STAGE_A_PLACES_ORGS_PROMPT,
-      context: [],
+      context: await readCanonicalNodes(userId, 'canonical_places_orgs'),
       newCaptureIds: unincorporated,
     })
   )
@@ -548,14 +563,16 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
     ...(await readCanonicalNodes(userId, 'canonical_places_orgs')),
   ]
 
-  // Stage B: projects, events, facts.
+  // Stage B: projects, events, facts. Context = the resolved A nodes plus the
+  // existing same-table nodes, so a new mention of a known project/event/fact
+  // resolves onto it instead of minting a variant.
   results.push(
     await incNodePass(userId, {
       rawTable: 'raw_projects',
       canonicalTable: 'canonical_projects',
       defaultTemporality: 'decaying',
       system: STAGE_B_PROJECTS_PROMPT,
-      context: aNodes,
+      context: [...aNodes, ...(await readCanonicalNodes(userId, 'canonical_projects'))],
       newCaptureIds: unincorporated,
     })
   )
@@ -565,7 +582,7 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
       canonicalTable: 'canonical_events',
       defaultTemporality: 'dated',
       system: STAGE_B_EVENTS_PROMPT,
-      context: aNodes,
+      context: [...aNodes, ...(await readCanonicalNodes(userId, 'canonical_events'))],
       newCaptureIds: unincorporated,
     })
   )
@@ -575,7 +592,7 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
       canonicalTable: 'canonical_facts',
       defaultTemporality: 'evergreen',
       system: STAGE_B_FACTS_PROMPT,
-      context: [],
+      context: await readCanonicalNodes(userId, 'canonical_facts'),
       newCaptureIds: unincorporated,
     })
   )
@@ -594,7 +611,7 @@ export async function runIncrementalDerivation(userId: string): Promise<PassResu
       canonicalTable: 'canonical_commitments',
       defaultTemporality: 'dated',
       system: STAGE_C_COMMITMENTS_PROMPT,
-      context: aNodes,
+      context: [...aNodes, ...(await readCanonicalNodes(userId, 'canonical_commitments'))],
       newCaptureIds: unincorporated,
     })
   )

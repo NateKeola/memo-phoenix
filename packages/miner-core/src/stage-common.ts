@@ -6,19 +6,64 @@ import { addUsage, emptyUsage, type DiscrepancyItem, type ModelNode, type Usage 
 
 // ---- reads ------------------------------------------------------------------
 
+// Captures the user retracted (capture_exclusions, migration 0016). The miner
+// honors an exclusion at READ time: extraction skips the capture, derivation never
+// sees its claims, and retireAbsorbedRows retires rows whose only evidence was
+// excluded. Graceful when the table is absent (pre-migration DB): empty set.
+export async function readExcludedCaptureIds(userId: string): Promise<Set<string>> {
+  const out = new Set<string>()
+  try {
+    const { data, error } = await admin()
+      .from('capture_exclusions')
+      .select('capture_id')
+      .eq('user_id', userId)
+    if (error) return out
+    for (const r of data ?? []) out.add(String((r as { capture_id: string }).capture_id))
+  } catch {
+    // table missing / not migrated: no exclusions
+  }
+  return out
+}
+
+// The raw claim IDS of excluded captures for one raw table. Used by the retirement
+// pass to recognize a canonical row whose entire evidence was retracted.
+export async function readExcludedClaimIds(userId: string, rawTable: string): Promise<Set<string>> {
+  const out = new Set<string>()
+  const excluded = await readExcludedCaptureIds(userId)
+  if (excluded.size === 0) return out
+  const ids = Array.from(excluded)
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200)
+    const { data, error } = await admin()
+      .from(rawTable)
+      .select('id')
+      .eq('user_id', userId)
+      .in('capture_id', chunk)
+    if (error) throw new Error(`[miner] read excluded claims ${rawTable}: ${error.message}`)
+    for (const r of data ?? []) out.add(String((r as { id: string }).id))
+  }
+  return out
+}
+
 export async function readRawClaims(
   userId: string,
   table: string
 ): Promise<Array<{ id: string; data: Record<string, unknown> }>> {
+  // Excluded captures' claims are filtered out here, so every derivation pass
+  // (and its input hash, which busts the memo when an exclusion is added) sees
+  // only admissible evidence.
+  const excluded = await readExcludedCaptureIds(userId)
   const { data, error } = await admin()
     .from(table)
-    .select('id, data')
+    .select('id, data, capture_id')
     .eq('user_id', userId)
   if (error) throw new Error(`[miner] read ${table}: ${error.message}`)
-  return (data ?? []).map((r) => ({
-    id: String((r as { id: string }).id),
-    data: ((r as { data: Record<string, unknown> }).data ?? {}) as Record<string, unknown>,
-  }))
+  return (data ?? [])
+    .filter((r) => !excluded.has(String((r as { capture_id: string }).capture_id)))
+    .map((r) => ({
+      id: String((r as { id: string }).id),
+      data: ((r as { data: Record<string, unknown> }).data ?? {}) as Record<string, unknown>,
+    }))
 }
 
 export type CanonNode = {
@@ -351,6 +396,96 @@ export async function writeCanonical(
     )
   }
   return { inserted, updated, unchanged }
+}
+
+// ---- retirement (the convergence path) ---------------------------------------
+// Before this, NOTHING ever retired a current row that a re-derivation stopped
+// emitting: writeCanonical only upserts what it is handed, so a near-duplicate,
+// a reworded insight, or an absorbed fragment stayed current forever (the audited
+// duplication-immortality defect). This retires a non-emitted current row ONLY
+// under a strict evidence rule, so a model that merely forgets a node on a given
+// run can never retire real knowledge:
+//
+//   A current row is retired iff it was NOT re-emitted this pass AND every claim
+//   it cites was either (a) cited by some row that WAS emitted this pass (its
+//   evidence was re-examined and attributed elsewhere: the duplicate-absorbed
+//   case), or (b) belongs to an excluded capture (its evidence was retracted).
+//
+// Rows whose evidence the model simply did not cite this run keep living: their
+// claims are in neither set, so the subset condition fails. Retirement is a soft
+// supersession (valid_to + superseded_by when a clear successor exists), fully
+// history-preserved and reversible in principle. FULL-derivation only: the
+// incremental fold re-emits only entities the new captures mention, so
+// non-emission there means "not mentioned", never "absorbed".
+//
+// Rails: skipped when the pass was memo-skipped (no emission list exists), capped
+// (if more than max(5, 50% of current rows) qualify, something is wrong upstream:
+// warn and retire nothing), and env-disable via MINER_RETIRE_ABSORBED=0.
+export async function retireAbsorbedRows(
+  userId: string,
+  table: string,
+  emitted: Array<{ id: string; source_claim_ids: string[] }>,
+  excludedClaimIds: Set<string>
+): Promise<number> {
+  if (process.env.MINER_RETIRE_ABSORBED === '0') return 0
+
+  const { data, error } = await admin()
+    .from(table)
+    .select('id, source_claim_ids')
+    .eq('user_id', userId)
+    .is('valid_to', null)
+  if (error) throw new Error(`[miner] read ${table} for retirement: ${error.message}`)
+  const current = (data ?? []).map((r) => ({
+    id: String((r as { id: string }).id),
+    claims: ((r as { source_claim_ids: string[] | null }).source_claim_ids ?? []) as string[],
+  }))
+  if (current.length === 0) return 0
+
+  const emittedIds = new Set(emitted.map((e) => e.id))
+  const attributed = new Set<string>()
+  for (const e of emitted) for (const c of e.source_claim_ids) attributed.add(c)
+
+  const candidates = current.filter(
+    (r) =>
+      !emittedIds.has(r.id) &&
+      r.claims.length > 0 &&
+      r.claims.every((c) => attributed.has(c) || excludedClaimIds.has(c))
+  )
+  if (candidates.length === 0) return 0
+
+  const cap = Math.max(5, Math.floor(current.length * 0.5))
+  if (candidates.length > cap) {
+    console.warn(
+      `[miner] retirement SKIPPED for ${table}: ${candidates.length} rows qualified ` +
+        `(> safety cap ${cap} of ${current.length} current); refusing a mass retirement`
+    )
+    return 0
+  }
+
+  const now = new Date().toISOString()
+  let retired = 0
+  for (const r of candidates) {
+    // the successor is the emitted row that absorbed most of this row's evidence
+    let successor: string | null = null
+    let bestOverlap = 0
+    for (const e of emitted) {
+      const overlap = r.claims.filter((c) => e.source_claim_ids.includes(c)).length
+      if (overlap > bestOverlap) {
+        bestOverlap = overlap
+        successor = e.id
+      }
+    }
+    const { error: uerr } = await admin()
+      .from(table)
+      .update({ valid_to: now, superseded_by: successor })
+      .eq('user_id', userId)
+      .eq('id', r.id)
+      .is('valid_to', null)
+    if (uerr) throw new Error(`[miner] retire absorbed ${table} ${r.id}: ${uerr.message}`)
+    retired++
+  }
+  if (retired > 0) console.log(`[miner] ${table}: retired ${retired} absorbed/retracted row(s)`)
+  return retired
 }
 
 type ExistingRow = {

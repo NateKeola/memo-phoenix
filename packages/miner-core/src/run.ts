@@ -2,6 +2,7 @@ import { admin } from './supabase'
 import { extractCapture, type Capture } from './extract'
 import { runDerivation } from './derive'
 import { INCREMENTAL, runIncrementalDerivation } from './incremental'
+import { readExcludedCaptureIds } from './stage-common'
 import { logEvent } from './telemetry'
 import { addUsage, emptyUsage, type PassResult, type Usage } from './types'
 
@@ -41,7 +42,10 @@ export async function mine(userId: string, startedAtMs: number): Promise<MineSum
     .eq('user_id', userId)
     .order('created_at', { ascending: true })
   if (error) throw new Error(`[miner] read captures: ${error.message}`)
-  const captures = (data ?? []) as Capture[]
+  // Retracted captures (capture_exclusions) are skipped entirely: never extracted,
+  // never derived from. Their existing traces are cleaned by the full recompute.
+  const excluded = await readExcludedCaptureIds(userId)
+  const captures = ((data ?? []) as Capture[]).filter((c) => !excluded.has(c.id))
 
   let extractUsage = emptyUsage()
   let rawInserted = 0

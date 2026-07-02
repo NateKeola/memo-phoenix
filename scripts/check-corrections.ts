@@ -16,6 +16,7 @@ import { canonicalId, normalizeLabel } from '../packages/miner-core/src/identity
 import {
   buildPeopleRewrite,
   repointReferences,
+  resolveSurvivorIds,
   retireStaleRelationships,
   rewriteLabel,
   supersedeLosers,
@@ -55,7 +56,12 @@ async function main() {
     check('Karalea and Kara Lee have DIFFERENT ids without a correction', pid('Karalea') !== pid('Kara Lee'))
     check('rewriteLabel maps "Karalea" to "Kara Lee"', rewriteLabel(rw, 'Karalea') === 'Kara Lee')
     check('a "Karalea" node now resolves to the Kara Lee id', pid(rewriteLabel(rw, 'Karalea')) === pid('Kara Lee'))
-    check('loserToSurvivor maps id(Karalea) -> id(Kara Lee)', rw.loserToSurvivor.get(pid('Karalea')) === pid('Kara Lee'))
+    check('loser id(Karalea) maps to the SURVIVOR LABEL "Kara Lee"', rw.loserToSurvivorLabel.get(pid('Karalea')) === 'Kara Lee')
+    // the payload's person_id (the row the user targeted) wins over the label hash
+    const rwId = buildPeopleRewrite(userId, [
+      corr('rename_person', { from_label: 'Karalea', to_label: 'Kara Lee', person_id: 'aaaaaaaa-0000-0000-0000-000000000001' }, 2),
+    ])
+    check('payload person_id is preferred as the loser id', rwId.loserToSurvivorLabel.get('aaaaaaaa-0000-0000-0000-000000000001') === 'Kara Lee')
     check('an untouched name is unchanged', rewriteLabel(rw, 'Todd Gavin') === 'Todd Gavin')
     check('rewrite is case/space-insensitive', rewriteLabel(rw, '  karalea ') === 'Kara Lee')
   }
@@ -64,7 +70,7 @@ async function main() {
   {
     const rw = buildPeopleRewrite(userId, [corr('merge_people', { from_label: 'Mike', into_label: 'Michael Smith' }, 1)])
     check('merge rewrites the loser onto the survivor label', rewriteLabel(rw, 'Mike') === 'Michael Smith')
-    check('merge records loser id -> survivor id', rw.loserToSurvivor.get(pid('Mike')) === pid('Michael Smith'))
+    check('merge records loser id -> survivor LABEL', rw.loserToSurvivorLabel.get(pid('Mike')) === 'Michael Smith')
   }
 
   console.log('\n== chained corrections collapse to a fixpoint (A->B, B->C) ==')
@@ -75,18 +81,18 @@ async function main() {
     ])
     check('A resolves all the way to C', rewriteLabel(rw, 'A') === 'C')
     check('B resolves to C', rewriteLabel(rw, 'B') === 'C')
-    check('both id(A) and id(B) are losers of id(C)', rw.loserToSurvivor.get(pid('A')) === pid('C') && rw.loserToSurvivor.get(pid('B')) === pid('C'))
+    check('both id(A) and id(B) are losers of label C', rw.loserToSurvivorLabel.get(pid('A')) === 'C' && rw.loserToSurvivorLabel.get(pid('B')) === 'C')
   }
 
   console.log('\n== guards ==')
   {
     const noop = buildPeopleRewrite(userId, [corr('rename_person', { from_label: 'Sam', to_label: 'sam' }, 1)])
-    check('a no-op rename (same normalized label) adds no loser', noop.loserToSurvivor.size === 0)
+    check('a no-op rename (same normalized label) adds no loser', noop.loserToSurvivorLabel.size === 0)
     const cyc = buildPeopleRewrite(userId, [
       corr('rename_person', { from_label: 'X', to_label: 'Y' }, 1),
       corr('rename_person', { from_label: 'Y', to_label: 'X' }, 2),
     ])
-    check('a cycle does not hang and produces a finite map', cyc.loserToSurvivor.size >= 0)
+    check('a cycle does not hang and produces a finite map', cyc.loserToSurvivorLabel.size >= 0)
     const empty = buildPeopleRewrite(userId, [])
     check('no corrections => empty fingerprint (memo not busted)', empty.fingerprint === '')
     check('any corrections => non-empty fingerprint', noop.fingerprint !== '')
@@ -105,6 +111,30 @@ async function main() {
     check('supersedeLosers(nonexistent) supersedes 0 rows', d === 0)
     const e = await repointReferences(userId, new Map([[pid('NoSuchPerson'), pid('AlsoNone')]]))
     check('repointReferences(nonexistent loser) repoints 0 rows', e === 0)
+  }
+
+  console.log('\n== survivor resolution never dangles ==')
+  {
+    // a survivor label with NO current row is skipped (the loser stays current),
+    // so supersession can never point at an id that does not exist (the live
+    // Morgan dangling-superseded_by defect this replaces).
+    const ghost = await resolveSurvivorIds(userId, new Map([[pid('SomeLoser'), 'No Such Survivor Label Zzz']]))
+    check('a survivor label with no current row resolves to NOTHING (loser kept)', ghost.size === 0)
+    const { data: anyPerson } = await svc
+      .from('canonical_people')
+      .select('id,label')
+      .eq('user_id', userId)
+      .is('valid_to', null)
+      .not('label', 'is', null)
+      .limit(1)
+      .maybeSingle()
+    if (anyPerson) {
+      const row = anyPerson as { id: string; label: string }
+      const real = await resolveSurvivorIds(userId, new Map([[pid('SomeLoser'), row.label]]))
+      check('a survivor label with a current row resolves to that exact row id', real.get(pid('SomeLoser')) === row.id)
+      const self = await resolveSurvivorIds(userId, new Map([[row.id, row.label]]))
+      check('loser == survivor row is skipped (no self-supersession)', self.size === 0)
+    }
   }
 
   console.log('\n== read-only preview: a merge cleans up every reference-bearing table ==')

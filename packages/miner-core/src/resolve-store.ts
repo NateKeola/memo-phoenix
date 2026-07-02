@@ -6,13 +6,17 @@ import { Resolver, type ResolveCandidate } from './resolution'
 // the new aliases a resolution run discovered (a drifted label remembered against
 // its stable id).
 //
-// Gated by MINER_STABLE_IDENTITY. OFF (default) keeps the exact prior behavior
-// (id = uuidv5 of the label). The operator turns it ON deliberately as the cutover
-// to stable identity, ideally alongside seeding entity_aliases from the existing
-// graph (scripts/migrate-identity.mjs). Self-seeding: with an empty alias table an
-// existing entity still resolves by its current label (exact match), so turning the
-// flag on is non-destructive (it adopts existing ids, it does not re-key).
-export const STABLE_IDENTITY = process.env.MINER_STABLE_IDENTITY === '1'
+// Gated by MINER_STABLE_IDENTITY, DEFAULT ON since 2026-07-01 (set =0 to revert to
+// the label-hash path). The flag shipped default-OFF in PR #17 pending an operator
+// cutover that never happened, and the 2026-07-01 audit traced live near-duplicate
+// minting directly to running without it (entity_aliases stayed empty, so every
+// label variant hashed to a fresh id). Turning it on is non-destructive by design:
+// with an empty alias table an existing entity still resolves by its current label
+// (exact match) or its stored data.aliases (alias tier), so existing ids are
+// adopted, never re-keyed; the flag is folded into each pass's input hash, so the
+// first run after the flip re-resolves (id-preserving) and seeds entity_aliases.
+// Ideally paired with the one-time alias seed (scripts/migrate-identity.mjs).
+export const STABLE_IDENTITY = process.env.MINER_STABLE_IDENTITY !== '0'
 
 type RowExtract = {
   // the identity basis for matching (insights match on data.statement, not the
