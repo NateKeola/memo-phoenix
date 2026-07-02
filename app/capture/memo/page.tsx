@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react'
 import { PageHeader } from '@/components/page-header'
 import { IconMic } from '@/components/icons'
+import { acquireMic, releaseStream } from '@/lib/media/mic'
 
 type State = 'idle' | 'recording' | 'transcribing' | 'done' | 'error'
 
@@ -32,19 +33,33 @@ export default function AddMemoPage() {
     setTranscript('')
     let stream: MediaStream
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    } catch {
-      setError('Microphone permission denied or unavailable.')
+      stream = await acquireMic()
+    } catch (e) {
+      // Surface the REAL reason (in-app browser, blocked permission, no device,
+      // device busy, insecure context) instead of one generic string.
+      setError(e instanceof Error ? e.message : 'Microphone unavailable.')
       setState('error')
       return
     }
-    const recorder = new MediaRecorder(stream)
+    let recorder: MediaRecorder
+    try {
+      recorder = new MediaRecorder(stream)
+    } catch (e) {
+      // Some browsers reject MediaRecorder / the default codec even after
+      // getUserMedia succeeds (older Safari). Release the device and report it.
+      releaseStream(stream)
+      setError(
+        `This browser cannot record audio (${e instanceof Error ? e.message : String(e)}). Try Safari or Chrome.`
+      )
+      setState('error')
+      return
+    }
     chunksRef.current = []
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) chunksRef.current.push(e.data)
     }
     recorder.onstop = async () => {
-      stream.getTracks().forEach((t) => t.stop())
+      releaseStream(stream)
       const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' })
       setState('transcribing')
       try {

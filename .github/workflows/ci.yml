@@ -43,3 +43,4 @@ jobs:
       - run: npx tsx scripts/check-resolution.ts
       - run: npx tsx scripts/check-freshness.ts
       - run: npx tsx scripts/check-streaming.ts
+      - run: npx tsx scripts/check-mic.ts
