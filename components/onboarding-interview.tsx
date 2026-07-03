@@ -13,7 +13,6 @@ import {
   useLiveStatus,
 } from '@/components/interview-debug'
 import { acquireMic, releaseStream, describeMicError } from '@/lib/media/mic'
-import { MicDiagnostics, type DownstreamLine } from '@/components/mic-diagnostics'
 
 type Phase = 'intro' | 'connecting' | 'live' | 'closing' | 'saving' | 'error' | 'not-captured'
 type Line = { role: string; text: string }
@@ -71,7 +70,6 @@ function Inner() {
   const finalizeEndRef = useRef<null | (() => Promise<void>)>(null)
   // live browser mic stream, kept for the session so the diagnostics meter runs
   // alongside the SDK; released in finalizeEnd / error / unmount.
-  const [micStream, setMicStream] = useState<MediaStream | null>(null)
   const micStreamRef = useRef<MediaStream | null>(null)
   // Clear the pacing timers AND re-allow arming. Without this a retried session
   // inherited the first session's clocks: the soft timer could wrap a fresh
@@ -206,7 +204,6 @@ function Inner() {
         const t = stream.getAudioTracks()[0]
         log(`mic permission granted: tracks=${stream.getAudioTracks().length} state=${t?.readyState} enabled=${t?.enabled} muted=${t?.muted}`)
         micStreamRef.current = stream
-        setMicStream(stream)
       } catch (e) {
         log(`getUserMedia failed: ${e instanceof Error ? e.message : String(e)}`)
         throw e instanceof Error ? e : new Error(describeMicError(e))
@@ -267,7 +264,6 @@ function Inner() {
     }
     releaseStream(micStreamRef.current)
     micStreamRef.current = null
-    setMicStream(null)
     try {
       const endRes = await fetch('/api/interview/end', {
         method: 'POST',
@@ -486,38 +482,9 @@ function Inner() {
         </div>
       ) : null}
 
-      {phase !== 'intro' ? (
-        <MicDiagnostics
-          stream={micStream}
-          error={error || null}
-          downstream={buildSdkLines(conversation, vadRef.current, phase)}
-          note={phase === 'live' ? 'Speak: the input level should move AND ElevenLabs input vol should rise.' : undefined}
-        />
-      ) : null}
 
       <DebugReadout title="/onboarding" status={liveStatus} lines={dbgLines} />
     </div>
   )
 }
 
-// SDK-side downstream lines for the diagnostics panel (see interview-widget for the
-// rationale). Onboarding phases that are 'connected' include live and closing.
-function buildSdkLines(
-  conversation: { getInputVolume?: () => number; status?: string; isMuted?: boolean },
-  vad: { heard: boolean; max: number },
-  phase: string
-): DownstreamLine[] {
-  if (!['connecting', 'live', 'closing'].includes(phase)) return []
-  let vol = 0
-  try {
-    vol = conversation.getInputVolume ? conversation.getInputVolume() : 0
-  } catch {
-    /* getInputVolume throws once the session is gone */
-  }
-  return [
-    { label: 'SDK mic muted', value: conversation.isMuted ? 'MUTED' : 'unmuted', ok: !conversation.isMuted },
-    { label: 'ElevenLabs input vol', value: vol.toFixed(2), ok: vol > 0.02 },
-    { label: 'first user voice (VAD)', value: vad.heard ? `detected (max ${vad.max.toFixed(2)})` : 'not yet', ok: vad.heard },
-    { label: 'connection', value: String(conversation.status ?? '?'), ok: conversation.status === 'connected' },
-  ]
-}
