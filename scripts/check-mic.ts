@@ -7,7 +7,6 @@
 //
 // Run: npx tsx scripts/check-mic.ts
 import { describeMicError, micUnavailableReason } from '../lib/media/mic'
-import { startMeter } from '../lib/media/mic-meter'
 
 let pass = 0
 let fail = 0
@@ -56,18 +55,6 @@ check('insecure context -> https message', /https|not served securely/i.test(mic
 // Capable environment -> null (proceed to acquireMic).
 setGlobals({ isSecureContext: true }, { mediaDevices: { getUserMedia() {} } })
 check('capable environment -> null (proceed)', micUnavailableReason() === null)
-
-console.log('\n== mic-meter safe fallback (no AudioContext -> never throws) ==')
-// In a non-browser context AudioContextCtor() is null, so startMeter must return a
-// no-op meter (level 0, state 'unavailable') instead of throwing into the capture flow.
-{
-  // ensure window has no AudioContext for this check
-  Object.defineProperty(globalThis, 'window', { value: {}, configurable: true, writable: true })
-  const m = startMeter({ getAudioTracks: () => [] } as unknown as MediaStream)
-  check('startMeter without AudioContext returns level 0', m.level() === 0)
-  check('startMeter without AudioContext reports contextState unavailable', m.contextState() === 'unavailable')
-  check('startMeter fallback stop()/resume() do not throw', (() => { try { m.stop(); void m.resume(); return true } catch { return false } })())
-}
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

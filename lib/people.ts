@@ -203,9 +203,13 @@ export function scoreSimilarity(aForms: string[], bForms: string[]): number {
 
 export async function duplicateCandidates(
   deps: RetrievalDeps,
-  person: { id: string; name: string | null; aliases: string[] }
+  person: { id: string; name: string | null; aliases: string[] },
+  // Optionally pass an already-fetched people list to avoid a redundant query (the
+  // person-detail page needs the full list for its "merge into" picker anyway, so it
+  // fetches once and reuses it here instead of listPeople running twice).
+  people?: PersonListItem[]
 ): Promise<PersonListItem[]> {
-  const all = await listPeople(deps)
+  const all = people ?? (await listPeople(deps))
   const targetForms = [person.name ?? '', ...person.aliases]
   return all
     .filter((p) => p.id !== person.id)

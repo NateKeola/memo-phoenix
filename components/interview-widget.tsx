@@ -13,7 +13,6 @@ import {
   useLiveStatus,
 } from '@/components/interview-debug'
 import { acquireMic, releaseStream, describeMicError } from '@/lib/media/mic'
-import { MicDiagnostics, type DownstreamLine } from '@/components/mic-diagnostics'
 
 type Mode = 'open' | 'daily'
 type Phase = 'choose' | 'connecting' | 'live' | 'saving' | 'done' | 'error'
@@ -52,7 +51,6 @@ function Interview() {
   const endingRef = useRef(false)
   // The live browser mic stream, kept for the session so the diagnostics panel meters
   // it ALONGSIDE the SDK's own capture. Released in end()/error/unmount.
-  const [micStream, setMicStream] = useState<MediaStream | null>(null)
   const micStreamRef = useRef<MediaStream | null>(null)
   const [mode, setMode] = useState<Mode | null>(null)
   const [error, setError] = useState('')
@@ -194,7 +192,6 @@ function Interview() {
           // audio but the ElevenLabs SDK/AudioContext does not". Released in end()/
           // the error catch below / unmount.
           micStreamRef.current = stream
-          setMicStream(stream)
         } catch (e) {
           log(`getUserMedia failed: ${e instanceof Error ? e.message : String(e)}`)
           throw e instanceof Error ? e : new Error(describeMicError(e))
@@ -247,7 +244,6 @@ function Interview() {
         if (timeoutRef.current) clearTimeout(timeoutRef.current)
         releaseStream(micStreamRef.current)
         micStreamRef.current = null
-        setMicStream(null)
         setError(e instanceof Error ? e.message : String(e))
         setPhase('error')
       }
@@ -266,7 +262,6 @@ function Interview() {
     }
     releaseStream(micStreamRef.current)
     micStreamRef.current = null
-    setMicStream(null)
     try {
       const res = await fetch('/api/interview/end', {
         method: 'POST',
@@ -345,40 +340,9 @@ function Interview() {
         </div>
       ) : null}
 
-      {phase !== 'choose' ? (
-        <MicDiagnostics
-          stream={micStream}
-          error={error || null}
-          downstream={buildSdkLines(conversation, vadRef.current, phase)}
-          note={phase === 'live' ? 'Speak: the input level should move AND ElevenLabs input vol should rise.' : undefined}
-        />
-      ) : null}
 
       <DebugReadout title="/capture/interview" status={liveStatus} lines={dbgLines} />
     </div>
   )
 }
 
-// Build the SDK-side downstream lines for the diagnostics panel: the ElevenLabs
-// input volume (its own view of the mic), whether a first user voice was detected
-// (VAD), and the socket status. Shown next to the browser-level meter so a mismatch
-// (browser hears audio, SDK reports 0) is obvious.
-function buildSdkLines(
-  conversation: { getInputVolume?: () => number; status?: string; isMuted?: boolean },
-  vad: { heard: boolean; max: number },
-  phase: string
-): DownstreamLine[] {
-  if (phase !== 'connecting' && phase !== 'live') return []
-  let vol = 0
-  try {
-    vol = conversation.getInputVolume ? conversation.getInputVolume() : 0
-  } catch {
-    /* getInputVolume throws once the session is gone */
-  }
-  return [
-    { label: 'SDK mic muted', value: conversation.isMuted ? 'MUTED' : 'unmuted', ok: !conversation.isMuted },
-    { label: 'ElevenLabs input vol', value: vol.toFixed(2), ok: vol > 0.02 },
-    { label: 'first user voice (VAD)', value: vad.heard ? `detected (max ${vad.max.toFixed(2)})` : 'not yet', ok: vad.heard },
-    { label: 'connection', value: String(conversation.status ?? '?'), ok: conversation.status === 'connected' },
-  ]
-}

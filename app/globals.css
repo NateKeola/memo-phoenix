@@ -600,6 +600,16 @@ a:hover { text-decoration: underline; text-decoration-color: var(--accent-deep);
 .mp-pop { animation: mp-pop 0.18s ease-out both; }
 .mp-rise { animation: mp-rise 0.32s ease-out both; }
 
+/* Loading skeletons: a soft shimmer placeholder so navigation paints instantly
+   (the loading.tsx boundary) while the per-user data streams in behind it. */
+@keyframes mp-shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+.mp-skel {
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--surf-2) 25%, var(--line) 37%, var(--surf-2) 63%);
+  background-size: 200% 100%;
+  animation: mp-shimmer 1.4s ease-in-out infinite;
+}
+
 /* Respect reduced-motion: hold every ambient + reveal animation still. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
