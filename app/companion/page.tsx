@@ -15,7 +15,9 @@ export default async function CompanionPage() {
 
   const today = await getToday({ supabase, userId: user.id }, Date.now())
 
-  await logEvent({ user_id: user.id, event_type: 'companion_surfaced', attrs: { ...today.counts } })
+  // Fire-and-forget: do NOT block the render on a telemetry insert round-trip.
+  // logEvent catches its own errors and never throws, so this is safe to not await.
+  void logEvent({ user_id: user.id, event_type: 'companion_surfaced', attrs: { ...today.counts } })
 
   return (
     <main className="mp-page">

@@ -26,10 +26,10 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
   const aliases = Array.isArray(person.data.aliases)
     ? (person.data.aliases as unknown[]).filter((x): x is string => typeof x === 'string')
     : []
-  const [candidates, allPeople] = await Promise.all([
-    duplicateCandidates(deps, { id: person.id, name: person.name, aliases }),
-    listPeople(deps),
-  ])
+  // Fetch the people list ONCE and reuse it for the duplicate-candidate scoring,
+  // instead of listPeople running twice (it also ran inside duplicateCandidates).
+  const allPeople = await listPeople(deps)
+  const candidates = await duplicateCandidates(deps, { id: person.id, name: person.name, aliases }, allPeople)
 
   const relationship = field(person.data, 'relationship')
   const role = field(person.data, 'role')
