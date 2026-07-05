@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { authorizeApiUser } from '@/lib/auth/guard'
 import { fetchTranscript } from '@/lib/elevenlabs'
 import { logEvent } from '@/lib/telemetry'
+import { logObs } from '@/lib/observability'
 
 export const runtime = 'nodejs'
 
@@ -60,6 +61,7 @@ export async function POST(request: NextRequest) {
     .eq('user_id', user.id)
   if (updErr) {
     console.error('[interview/end] session update:', updErr.message)
+    await logObs({ subsystem: 'interview', event: 'error', status: 'error', userId: user.id, errorType: 'session_update', errorMessage: updErr.message })
     return NextResponse.json({ error: 'could not end session' }, { status: 500 })
   }
 
@@ -73,6 +75,7 @@ export async function POST(request: NextRequest) {
       event_type: 'interview_ended',
       attrs: { session_id: body.sessionId, transcript_length: transcript.length, turns, captured: false, too_short: true, source },
     })
+    await logObs({ subsystem: 'interview', event: 'end', level: 'warn', status: 'too_short', userId: user.id, meta: { turns, captured: false } })
     return NextResponse.json({ captureId: null, transcriptLength: transcript.length, captured: false })
   }
 
@@ -92,6 +95,7 @@ export async function POST(request: NextRequest) {
     .single()
   if (error) {
     console.error('[interview/end] capture insert:', error.message)
+    await logObs({ subsystem: 'interview', event: 'error', status: 'error', userId: user.id, errorType: 'capture_insert', errorMessage: error.message, meta: { turns } })
     return NextResponse.json({ error: 'could not save capture' }, { status: 500 })
   }
 
@@ -101,6 +105,7 @@ export async function POST(request: NextRequest) {
     attrs: { session_id: body.sessionId, transcript_length: transcript.length, turns, captured: true, source },
   })
 
+  await logObs({ subsystem: 'interview', event: 'end', status: 'captured', userId: user.id, meta: { turns, captured: true } })
   return NextResponse.json({
     captureId: (cap as { id: string }).id,
     transcriptLength: transcript.length,

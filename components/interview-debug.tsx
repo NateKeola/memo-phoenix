@@ -73,6 +73,16 @@ export function describeDisconnect(d: unknown): string {
   return parts.join(' ')
 }
 
+// Structured disconnect fields for the durable observability layer (reason + close
+// code only; never any transcript/content). "user" = our own teardown, "agent" = the
+// ElevenLabs agent ended the call, "error" = the socket closed on an error.
+export function disconnectInfo(d: unknown): { reason: string; closeCode?: number } {
+  if (d == null) return { reason: 'unknown' }
+  if (typeof d === 'string') return { reason: d }
+  const o = d as { reason?: string; closeCode?: number }
+  return { reason: o.reason ?? 'unknown', closeCode: typeof o.closeCode === 'number' ? o.closeCode : undefined }
+}
+
 // Logging-only ElevenLabs callbacks the components are NOT already using. Spreading
 // these into useConversation is pure instrumentation (no behavior change). The set of
 // keys is constant across renders, so useStableCallbacks keeps the registration stable

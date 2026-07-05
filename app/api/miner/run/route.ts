@@ -6,6 +6,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { isGithubDispatchConfigured, triggerMinerWorkflow } from '@/lib/miner/dispatch'
 import { getMinerState } from '@/lib/miner/state'
 import { logEvent } from '@/lib/telemetry'
+import { logObs } from '@/lib/observability'
 
 export const runtime = 'nodejs'
 // 300s so the app deploys on any plan. Real mines of a grown corpus take 13 to 22
@@ -82,6 +83,7 @@ export async function POST(request: NextRequest) {
         // Do NOT fall through to a doomed inline run: report the dispatch failure.
         const msg = e instanceof Error ? e.message : String(e)
         console.error('[miner/run] dispatch failed:', msg)
+        await logObs({ subsystem: 'miner', event: 'dispatch_error', status: 'error', userId: targetUserId, errorMessage: msg, meta: { trigger } })
         return NextResponse.json({ status: 'error', error: `off-machine dispatch failed: ${msg}` }, { status: 502 })
       }
     }

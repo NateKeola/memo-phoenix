@@ -7,12 +7,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   DebugReadout,
   describeDisconnect,
+  disconnectInfo,
   diagnosticCallbacks,
   newVadState,
   useInterviewDebug,
   useLiveStatus,
 } from '@/components/interview-debug'
 import { acquireMic, releaseStream, describeMicError } from '@/lib/media/mic'
+import { reportObs } from '@/lib/obs-client'
+import { localTimeZone } from '@/lib/tz'
 
 type Mode = 'open' | 'daily'
 type Phase = 'choose' | 'connecting' | 'live' | 'saving' | 'done' | 'error'
@@ -53,6 +56,11 @@ function Interview() {
   // it ALONGSIDE the SDK's own capture. Released in end()/error/unmount.
   const micStreamRef = useRef<MediaStream | null>(null)
   const [mode, setMode] = useState<Mode | null>(null)
+  const modeRef = useRef<Mode | null>(null)
+  modeRef.current = mode
+  const [paused, setPaused] = useState(false)
+  const pausedRef = useRef(false)
+  pausedRef.current = paused
   const [error, setError] = useState('')
   const [lines, setLines] = useState<Line[]>([])
   const [result, setResult] = useState<{ captured: boolean; length: number } | null>(null)
@@ -106,9 +114,19 @@ function Interview() {
       if (props?.conversationId) convIdRef.current = props.conversationId
       log(`onConnect conversationId=${props?.conversationId ?? '?'}`)
       setPhase('live')
+      reportObs({ subsystem: 'interview', event: 'connect', meta: { mode: modeRef.current ?? 'open' } })
     },
     onDisconnect: (details: unknown) => {
       log(`onDisconnect ${describeDisconnect(details)}`)
+      const info = disconnectInfo(details)
+      // A disconnect we DID initiate (endingRef) is the normal save path; only an
+      // unexpected one is an error-level observability signal.
+      reportObs({
+        subsystem: 'interview',
+        event: 'disconnect',
+        level: !endingRef.current && (phaseRef.current === 'live' || phaseRef.current === 'connecting') ? 'error' : 'info',
+        meta: { mode: modeRef.current ?? 'open', reason: info.reason, ...(info.closeCode != null ? { closeCode: info.closeCode } : {}) },
+      })
       // React to a disconnect we did not initiate: without this the UI showed
       // 'Listening...' against a dead socket indefinitely (the documented
       // ends-after-greeting failure signature). The End-button flow (endingRef)
@@ -131,12 +149,29 @@ function Interview() {
     },
     onError: (e: unknown) => {
       log(`onError ${e instanceof Error ? e.message : String(e)}`)
+      reportObs({ subsystem: 'interview', event: 'error', level: 'error', errorMessage: e instanceof Error ? e.message : String(e), meta: { mode: modeRef.current ?? 'open' } })
       setError(e instanceof Error ? e.message : String(e))
       setPhase('error')
     },
   })
 
   const liveStatus = useLiveStatus(conversation, phase === 'connecting' || phase === 'live', log, vadRef)
+
+  // Pause: mute the SDK mic so the agent hears nothing and holds off, and show a
+  // clear paused state. Resume unmutes and the conversation continues. No pacing
+  // timers run in this (daily/open) surface, so pausing here only gates the mic.
+  const togglePause = useCallback(() => {
+    const next = !pausedRef.current
+    const c = conversation as { setMuted?: (m: boolean) => void }
+    try {
+      c.setMuted?.(next)
+      log(next ? 'paused (mic muted)' : 'resumed (mic unmuted)')
+    } catch {
+      /* setMuted may be unavailable */
+    }
+    reportObs({ subsystem: 'interview', event: next ? 'pause' : 'resume', meta: { mode: modeRef.current ?? 'open' } })
+    setPaused(next)
+  }, [conversation, log])
 
   // Defensive: ensure the SDK mic is UNMUTED once connected. If the SDK ever starts
   // muted, the agent hears nothing (greets then ends on silence); unmuting is a
@@ -161,6 +196,9 @@ function Interview() {
       endingRef.current = false
       setError('')
       setMode(m)
+      modeRef.current = m
+      setPaused(false)
+      pausedRef.current = false
       setPhase('connecting')
       linesRef.current = []
       setLines([])
@@ -186,6 +224,7 @@ function Interview() {
           const stream = await acquireMic()
           const t = stream.getAudioTracks()[0]
           log(`mic permission granted: tracks=${stream.getAudioTracks().length} state=${t?.readyState} enabled=${t?.enabled} muted=${t?.muted}`)
+          reportObs({ subsystem: 'interview', event: 'mic_ok', meta: { mode: m, micState: t?.readyState ?? 'unknown' } })
           // KEEP it alive for the session so the browser-level meter runs alongside
           // the SDK's own capture (Chrome allows concurrent getUserMedia). This is
           // the signal that separates "browser gets NO audio" from "browser gets
@@ -194,6 +233,7 @@ function Interview() {
           micStreamRef.current = stream
         } catch (e) {
           log(`getUserMedia failed: ${e instanceof Error ? e.message : String(e)}`)
+          reportObs({ subsystem: 'interview', event: 'mic_error', level: 'error', errorMessage: e instanceof Error ? e.message : String(e), meta: { mode: m } })
           throw e instanceof Error ? e : new Error(describeMicError(e))
         }
         log('POST /api/interview/start')
@@ -202,6 +242,7 @@ function Interview() {
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             mode: m,
+            timeZone: localTimeZone(),
             target: target ? { kind: target.kind, id: target.id, seed: target.seed } : undefined,
           }),
         })
@@ -310,10 +351,22 @@ function Interview() {
           <p className="mp-eyebrow mp-eyebrow--accent" style={{ letterSpacing: '0.22em' }}>
             {phase === 'connecting'
               ? mode === 'daily' ? 'Composing your brief...' : 'Connecting...'
-              : conversation.isSpeaking ? 'Memo is speaking...' : 'Listening...'}
+              : paused ? 'Paused' : conversation.isSpeaking ? 'Memo is speaking...' : 'Listening...'}
           </p>
           {phase === 'live' ? (
-            <button type="button" className="mp-btn mp-btn--ghost" onClick={end}>End and save</button>
+            <>
+              {paused ? (
+                <p className="mp-meta" style={{ textAlign: 'center', maxWidth: 300 }}>
+                  Your mic is muted, so Memo is waiting. Resume when you are ready.
+                </p>
+              ) : null}
+              <div style={{ display: 'flex', gap: 12 }}>
+                <button type="button" className="mp-btn mp-btn--ghost" onClick={togglePause}>
+                  {paused ? 'Resume' : 'Pause'}
+                </button>
+                <button type="button" className="mp-btn mp-btn--ghost" onClick={end}>End and save</button>
+              </div>
+            </>
           ) : null}
         </div>
       ) : null}
