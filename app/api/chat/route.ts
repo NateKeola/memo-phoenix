@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { authorizeApiUser } from '@/lib/auth/guard'
 import { logEvent } from '@/lib/telemetry'
+import { logObs } from '@/lib/observability'
 import { runChat, type ChatTurn } from '@/lib/chat/agent'
 
 export const runtime = 'nodejs'
@@ -80,6 +81,7 @@ export async function POST(request: NextRequest) {
         })
       } catch (err) {
         console.error('[chat] runChat failed:', err)
+        await logObs({ subsystem: 'surface', event: 'chat_error', status: 'error', userId: user.id, errorType: err instanceof Error ? err.name : 'error', errorMessage: err instanceof Error ? err.message : String(err) })
         controller.enqueue(encoder.encode(friendlyError(err)))
         await logEvent({
           user_id: user.id,

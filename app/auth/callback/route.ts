@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { type EmailOtpType } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
+import { logObs } from '@/lib/observability'
 
 // Establishes a session from an auth callback, then redirects to `next`.
 //
@@ -33,6 +34,8 @@ export async function GET(request: NextRequest) {
     const { error } = await supabase.auth.verifyOtp({ type, token_hash: tokenHash })
     if (!error) return NextResponse.redirect(`${origin}${next}`)
   }
+
+  await logObs({ subsystem: 'auth', event: 'callback_failed', status: 'error', level: 'error', meta: { type: type ?? 'none', hadCode: Boolean(code), hadTokenHash: Boolean(tokenHash) } })
 
   // A failed RECOVERY link should land on the reset page's clean "expired" state,
   // not a generic sign-in error, so the person knows to ask for a fresh link.

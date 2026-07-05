@@ -9,6 +9,7 @@ import {
 } from '@/lib/interview/compose'
 import { getSignedUrl } from '@/lib/elevenlabs'
 import { logEvent } from '@/lib/telemetry'
+import { logObs } from '@/lib/observability'
 
 export const runtime = 'nodejs'
 
@@ -24,7 +25,11 @@ export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => ({}))) as {
     mode?: string
     target?: { kind?: string; id?: string; seed?: string }
+    timeZone?: string
   }
+  // The user's IANA timezone (browser-sent) so the agent knows the real local
+  // "now"; validated loosely (a plausible IANA string), else compose falls back.
+  const timeZone = typeof body.timeZone === 'string' && /^[A-Za-z_]+\/[A-Za-z0-9_+\-\/]+$/.test(body.timeZone) ? body.timeZone : undefined
   const target = body.target
   // Onboarding (first-run) is its own mode: a warm, broad first life overview with
   // no brief (the graph is empty), using the isolated onboarding bible.
@@ -75,8 +80,8 @@ export async function POST(request: NextRequest) {
   const now = new Date()
   const userName = process.env.MEMO_USER_NAME || user.email?.split('@')[0] || 'there'
   const systemPrompt = isOnboarding
-    ? composeOnboardingSystemPrompt({ userName, now })
-    : composeSystemPrompt({ userName, brief: brief.text, now })
+    ? composeOnboardingSystemPrompt({ userName, now, timeZone })
+    : composeSystemPrompt({ userName, brief: brief.text, now, timeZone })
   const first = firstMessage(effectiveMode)
 
   // For daily mode store the brief object even when empty, so the record is never
@@ -89,6 +94,7 @@ export async function POST(request: NextRequest) {
     .single()
   if (sErr) {
     console.error('[interview/start] session insert:', sErr.message)
+    await logObs({ subsystem: 'interview', event: 'start_error', status: 'error', userId: user.id, errorType: 'session_insert', errorMessage: sErr.message, meta: { mode } })
     return NextResponse.json({ error: 'could not create session' }, { status: 500 })
   }
   const sessionId = (sessionRow as { id: string }).id
@@ -98,6 +104,7 @@ export async function POST(request: NextRequest) {
     signedUrl = await getSignedUrl()
   } catch (err) {
     console.error('[interview/start] signed url:', err)
+    await logObs({ subsystem: 'interview', event: 'start_error', status: 'error', userId: user.id, errorType: 'elevenlabs_signed_url', errorMessage: err instanceof Error ? err.message : String(err), meta: { mode } })
     return NextResponse.json({ error: 'could not start interview (ElevenLabs)' }, { status: 502 })
   }
 
@@ -116,6 +123,7 @@ export async function POST(request: NextRequest) {
       target_id: targetId,
     },
   })
+  await logObs({ subsystem: 'interview', event: 'started', status: 'ok', userId: user.id, meta: { mode, effective_mode: effectiveMode, brief_item_count: brief.itemCount } })
 
   // The freshness loop is visible in telemetry: which aging nodes were folded into
   // the interview as "is this still true?" checks (the renew/supersede outcome is

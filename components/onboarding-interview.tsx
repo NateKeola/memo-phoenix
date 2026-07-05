@@ -7,12 +7,15 @@ import { BrandSeed } from '@/components/brand-seed'
 import {
   DebugReadout,
   describeDisconnect,
+  disconnectInfo,
   diagnosticCallbacks,
   newVadState,
   useInterviewDebug,
   useLiveStatus,
 } from '@/components/interview-debug'
 import { acquireMic, releaseStream, describeMicError } from '@/lib/media/mic'
+import { reportObs } from '@/lib/obs-client'
+import { localTimeZone } from '@/lib/tz'
 
 type Phase = 'intro' | 'connecting' | 'live' | 'closing' | 'saving' | 'error' | 'not-captured'
 type Line = { role: string; text: string }
@@ -57,6 +60,9 @@ function Inner() {
   const router = useRouter()
   const [phase, setPhase] = useState<Phase>('intro')
   const [error, setError] = useState('')
+  const [paused, setPaused] = useState(false)
+  const pausedRef = useRef(false)
+  pausedRef.current = paused
   const [lines, setLines] = useState<Line[]>([])
 
   const sessionIdRef = useRef<string | null>(null)
@@ -78,12 +84,21 @@ function Inner() {
     if (sessionSoftRef.current) clearTimeout(sessionSoftRef.current)
     if (sessionHardRef.current) clearTimeout(sessionHardRef.current)
     sessionTimersStartedRef.current = false
+    timersArmedAtRef.current = 0
+    pausedAtRef.current = 0
+    accumulatedPausedMsRef.current = 0
   }
   // length-pacing refs (the soft wrap + hard backstop, set once when live)
   const phaseRef = useRef<Phase>('intro')
   const sessionSoftRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const sessionHardRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const sessionTimersStartedRef = useRef(false)
+  // pause-aware pacing: when the timers were first armed, and how long the session
+  // has been paused, so a resume re-arms them for the REMAINING budget (a pause must
+  // not let the soft/hard timers count down and wrap the conversation up early).
+  const timersArmedAtRef = useRef(0)
+  const pausedAtRef = useRef(0)
+  const accumulatedPausedMsRef = useRef(0)
   phaseRef.current = phase
 
   // --- temporary beta instrumentation (interview-end investigation) ---
@@ -118,9 +133,18 @@ function Inner() {
       if (props?.conversationId) convIdRef.current = props.conversationId
       log(`onConnect conversationId=${props?.conversationId ?? '?'}`)
       setPhase('live')
+      reportObs({ subsystem: 'onboarding', event: 'connect', meta: { mode: 'onboarding' } })
     },
     onDisconnect: (details: unknown) => {
       log(`onDisconnect ${describeDisconnect(details)}`)
+      const info = disconnectInfo(details)
+      const unexpected = !endingRef.current && (phaseRef.current === 'live' || phaseRef.current === 'connecting')
+      reportObs({
+        subsystem: 'onboarding',
+        event: 'disconnect',
+        level: unexpected ? 'error' : 'info',
+        meta: { mode: 'onboarding', reason: info.reason, ...(info.closeCode != null ? { closeCode: info.closeCode } : {}) },
+      })
       // React to a disconnect we did not initiate. Before this, the UI kept showing
       // "Listening..." against a dead socket indefinitely (the known
       // ends-after-greeting failure), and the user talked into nothing.
@@ -151,6 +175,7 @@ function Inner() {
     },
     onError: (e: unknown) => {
       log(`onError ${e instanceof Error ? e.message : String(e)}`)
+      reportObs({ subsystem: 'onboarding', event: 'error', level: 'error', errorMessage: e instanceof Error ? e.message : String(e), meta: { mode: 'onboarding' } })
       setError(e instanceof Error ? e.message : String(e))
       setPhase('error')
     },
@@ -181,6 +206,8 @@ function Inner() {
 
   const start = useCallback(async () => {
     setError('')
+    setPaused(false)
+    pausedRef.current = false
     setPhase('connecting')
     linesRef.current = []
     setLines([])
@@ -203,16 +230,18 @@ function Inner() {
         const stream = await acquireMic()
         const t = stream.getAudioTracks()[0]
         log(`mic permission granted: tracks=${stream.getAudioTracks().length} state=${t?.readyState} enabled=${t?.enabled} muted=${t?.muted}`)
+        reportObs({ subsystem: 'onboarding', event: 'mic_ok', meta: { mode: 'onboarding', micState: t?.readyState ?? 'unknown' } })
         micStreamRef.current = stream
       } catch (e) {
         log(`getUserMedia failed: ${e instanceof Error ? e.message : String(e)}`)
+        reportObs({ subsystem: 'onboarding', event: 'mic_error', level: 'error', errorMessage: e instanceof Error ? e.message : String(e), meta: { mode: 'onboarding' } })
         throw e instanceof Error ? e : new Error(describeMicError(e))
       }
       log('POST /api/interview/start (onboarding)')
       const res = await fetch('/api/interview/start', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ mode: 'onboarding' }),
+        body: JSON.stringify({ mode: 'onboarding', timeZone: localTimeZone() }),
       })
       const cfg = (await res.json()) as {
         sessionId?: string
@@ -344,23 +373,76 @@ function Inner() {
     }
   }, [conversation, log])
 
+  // (Re)arm the soft wrap + hard backstop for the given REMAINING budgets. Used both
+  // for the initial arming and to resume pacing after a pause with the time that was
+  // left, so a pause never shortens the interview.
+  const armPacing = useCallback(
+    (remSoftMs: number, remHardMs: number) => {
+      if (sessionSoftRef.current) clearTimeout(sessionSoftRef.current)
+      if (sessionHardRef.current) clearTimeout(sessionHardRef.current)
+      sessionSoftRef.current = setTimeout(() => {
+        log('SOFT pacing timer fired')
+        if (phaseRef.current === 'live') beginClose()
+      }, Math.max(0, remSoftMs))
+      sessionHardRef.current = setTimeout(() => {
+        log('HARD pacing timer fired')
+        void finalizeEnd()
+      }, Math.max(0, remHardMs))
+    },
+    [beginClose, finalizeEnd, log]
+  )
+
   // Length pacing: when the interview goes live, set a SOFT wrap-up nudge (~10 min,
   // cue the warm close if still live) and a HARD backstop (~15 min, end regardless).
-  // Set ONCE; they persist across the live -> closing transition. The user can still
-  // end early via "Ready to end the interview?".
+  // Armed ONCE; they persist across the live -> closing transition, and pause/resume
+  // suspends and re-arms them (below). The user can still end early via the button.
   useEffect(() => {
     if (phase !== 'live' || sessionTimersStartedRef.current) return
     sessionTimersStartedRef.current = true
+    timersArmedAtRef.current = Date.now()
+    accumulatedPausedMsRef.current = 0
+    pausedAtRef.current = 0
     log(`pacing timers armed: soft ${SOFT_WRAP_MS / 1000}s, hard ${HARD_END_MS / 1000}s`)
-    sessionSoftRef.current = setTimeout(() => {
-      log('SOFT pacing timer fired (10 min)')
-      if (phaseRef.current === 'live') beginClose()
-    }, SOFT_WRAP_MS)
-    sessionHardRef.current = setTimeout(() => {
-      log('HARD pacing timer fired (15 min)')
-      void finalizeEnd()
-    }, HARD_END_MS)
-  }, [phase, beginClose, finalizeEnd, log])
+    armPacing(SOFT_WRAP_MS, HARD_END_MS)
+  }, [phase, armPacing, log])
+
+  // Pause: mute the SDK mic so the agent hears nothing and holds off, AND suspend the
+  // length-pacing timers. Critically, suspending the timers means a pause never
+  // triggers an early wrap-up ("Ready to end") or the hard backstop. Resume unmutes
+  // and re-arms pacing for the REMAINING budget (the paused span is not counted), so
+  // the ~10/15 min clocks continue where they left off.
+  const togglePause = useCallback(() => {
+    const next = !pausedRef.current
+    const c = conversation as { setMuted?: (m: boolean) => void }
+    if (next) {
+      try {
+        c.setMuted?.(true)
+      } catch {
+        /* setMuted may be unavailable */
+      }
+      if (sessionSoftRef.current) clearTimeout(sessionSoftRef.current)
+      if (sessionHardRef.current) clearTimeout(sessionHardRef.current)
+      pausedAtRef.current = Date.now()
+      log('paused (mic muted, pacing suspended)')
+    } else {
+      try {
+        c.setMuted?.(false)
+      } catch {
+        /* setMuted may be unavailable */
+      }
+      if (pausedAtRef.current) {
+        accumulatedPausedMsRef.current += Date.now() - pausedAtRef.current
+        pausedAtRef.current = 0
+      }
+      if (sessionTimersStartedRef.current && timersArmedAtRef.current) {
+        const elapsedLive = Date.now() - timersArmedAtRef.current - accumulatedPausedMsRef.current
+        armPacing(SOFT_WRAP_MS - elapsedLive, HARD_END_MS - elapsedLive)
+      }
+      log('resumed (mic unmuted, pacing re-armed)')
+    }
+    reportObs({ subsystem: 'onboarding', event: next ? 'pause' : 'resume', meta: { mode: 'onboarding' } })
+    setPaused(next)
+  }, [conversation, armPacing, log])
 
   // Auto-end once the agent's closing has played: wait for it to speak, then for a
   // short silence, then finalize. Resets the silence timer whenever it resumes.
@@ -413,16 +495,23 @@ function Inner() {
               ? 'Connecting...'
               : phase === 'closing'
                 ? conversation.isSpeaking ? 'Saying goodbye...' : 'Wrapping up...'
-                : conversation.isSpeaking ? 'Memo is speaking...' : 'Listening...'}
+                : paused ? 'Paused' : conversation.isSpeaking ? 'Memo is speaking...' : 'Listening...'}
           </p>
 
           {phase === 'live' ? (
             <>
-              <button type="button" className="mp-btn mp-btn--ghost" onClick={beginClose}>
-                Ready to end the interview?
-              </button>
-              <p className="mp-meta" style={{ textAlign: 'center', maxWidth: 320 }}>
-                Memo will gently wrap up around ten minutes, or end whenever you are ready.
+              <div style={{ display: 'flex', gap: 12 }}>
+                <button type="button" className="mp-btn mp-btn--ghost" onClick={togglePause}>
+                  {paused ? 'Resume' : 'Pause'}
+                </button>
+                <button type="button" className="mp-btn mp-btn--ghost" onClick={beginClose}>
+                  Ready to end the interview?
+                </button>
+              </div>
+              <p className="mp-meta" style={{ textAlign: 'center', maxWidth: 340 }}>
+                {paused
+                  ? 'Paused. Your mic is muted and the clock is stopped. Resume when you are ready.'
+                  : 'Memo will gently wrap up around ten minutes, or end whenever you are ready.'}
               </p>
             </>
           ) : null}

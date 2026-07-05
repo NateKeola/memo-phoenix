@@ -4,6 +4,7 @@ import { isAllowed } from '@/lib/auth/guard'
 import { getMinerState } from '@/lib/miner/state'
 import { isGithubDispatchConfigured, triggerMinerWorkflow } from '@/lib/miner/dispatch'
 import { logEvent } from '@/lib/telemetry'
+import { logObs } from '@/lib/observability'
 
 export const runtime = 'nodejs'
 
@@ -98,6 +99,8 @@ export async function GET(request: Request) {
       })
     }
   }
+
+  await logObs({ subsystem: 'cron', event: 'sweep', status: 'ok', meta: { checked, dispatched: triggered.length } })
 
   return NextResponse.json({ ok: true, checked, triggered })
 }

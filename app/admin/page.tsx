@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { isOperator } from '@/lib/auth/operator'
 import { InviteForm } from '@/components/admin/invite-form'
@@ -31,6 +32,7 @@ export default async function AdminPage() {
     <main className="mp-page mp-page--flush" style={{ maxWidth: 600 }}>
       <PageHeader back="/" backLabel="Home" />
       <h1 className="mp-h1">Invites</h1>
+      <p className="mp-meta" style={{ marginTop: 6 }}><Link href="/admin/observability" className="mp-link">Open the observability console &rarr;</Link></p>
       <p className="mp-sub">
         Add a person to the allowlist by email. They then create their own account at the sign-in
         page with that email and a password. Only allowlisted addresses can register.
