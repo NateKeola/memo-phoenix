@@ -1,7 +1,6 @@
 import { Chat } from '@/components/chat'
 import { requireAllowedUser } from '@/lib/auth/guard'
 import { PageHeader } from '@/components/page-header'
-import { BottomNav } from '@/components/bottom-nav'
 
 // The ask/chat surface. Always accessible to an allowlisted signed-in user (no
 // baseline gate, by decision).
@@ -17,7 +16,6 @@ export default async function AskPage() {
         &ldquo;who is Karalea&rdquo;, &ldquo;what do I owe people&rdquo;, or &ldquo;what is coming up&rdquo;.
       </p>
       <Chat />
-      <BottomNav />
     </main>
   )
 }

@@ -1,4 +1,3 @@
-import { BottomNav } from '@/components/bottom-nav'
 import { BrandSeed } from '@/components/brand-seed'
 import { Skel } from '@/components/skeleton'
 
@@ -16,7 +15,6 @@ export default function Loading() {
         <BrandSeed />
         <Skel w={150} h={15} style={{ marginTop: 24 }} />
       </div>
-      <BottomNav />
     </main>
   )
 }

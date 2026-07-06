@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import './globals.css'
 import { RecoveryHashCatcher } from '@/components/auth/recovery-hash-catcher'
+import { AppChrome } from '@/components/app-chrome'
 
 export const metadata = {
   title: 'Memo Phoenix',
@@ -27,7 +28,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         />
       </head>
       <body>
-        <RecoveryHashCatcher />{children}</body>
+        <RecoveryHashCatcher />{children}<AppChrome /></body>
     </html>
   )
 }
