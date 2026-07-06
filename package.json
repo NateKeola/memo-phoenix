@@ -21,6 +21,7 @@
     "check:tables": "node scripts/check-table-isolation.mjs",
     "check:api": "node scripts/check-api-isolation.mjs",
     "check:rename": "tsx scripts/check-rename-fix.ts",
+    "check:contacts": "tsx scripts/check-contacts.ts",
     "prompts:generate": "node packages/miner-core/scripts/generate-prompts.mjs",
     "bible:generate": "node scripts/generate-bible.mjs",
     "miner": "tsx packages/miner-core/src/cli.ts",
