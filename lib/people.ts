@@ -26,12 +26,20 @@ function norm(s: string): string {
 // then the displayed name would lag. This reads the pending rename corrections and
 // maps the SPECIFIC PERSON ID they target to the corrected name, so a rename
 // reaches the contact sheet immediately. It never edits canonical. Keying on the
-// person id (not the label) means it (a) cannot re-fire onto a different later
-// person who reuses the old name, and (b) self-consumes once the miner applies the
-// rename and the person's id changes (the old id no longer matches a current row).
-// A later rename of the same id wins (corrections are read in created_at order).
-// Merges are not shown optimistically: they collapse rows on the mine, and faking
-// that pre-mine would show two rows with the same name.
+// person id (not the label) means it cannot re-fire onto a different later person
+// who reuses the old name. A later rename of the same id wins (corrections are read
+// in created_at order). Merges are not shown optimistically: they collapse rows on
+// the mine, and faking that pre-mine would show two rows with the same name.
+//
+// CLEARING (applyPending): the overlay is "pending" only while the canonical label
+// still differs from the target. It clears in EITHER of the two ways a rename can
+// land: (a) the miner superseded the row onto a new survivor id, so the old id is no
+// longer current (not iterated at all); or (b) the stable-identity resolver kept the
+// row's id and relabeled it IN PLACE, so the current row's label now equals the
+// target. The original code only handled (a) ("self-consumes once the person's id
+// changes"), so an in-place rename (Morgan -> Morgan Alexander, Nate -> Nate
+// Tennant) stayed "pending" forever even though it had applied. Checking the label
+// covers both.
 export async function pendingRenames(deps: RetrievalDeps): Promise<Map<string, string>> {
   const { data } = await deps.supabase
     .from('corrections')
@@ -49,9 +57,20 @@ export async function pendingRenames(deps: RetrievalDeps): Promise<Map<string, s
   return out
 }
 
-function applyPending(id: string, label: string | null, renames: Map<string, string>): { name: string | null; pending: boolean } {
+function applyPending(
+  id: string,
+  label: string | null,
+  renames: Map<string, string>
+): { name: string | null; pending: boolean; landed: boolean } {
   const to = renames.get(id)
-  return to ? { name: to, pending: true } : { name: label, pending: false }
+  if (!to) return { name: label, pending: false, landed: false }
+  // The rename has landed once the current row's label matches the target (the miner
+  // relabeled it in place; its id did not change). Only pending while the label still
+  // differs. `landed` tells the display to derive first/last from the target label,
+  // not from data.first_name (which a drifted incremental fold can leave stale even
+  // when the label matches).
+  if (label && norm(label) === norm(to)) return { name: label, pending: false, landed: true }
+  return { name: to, pending: true, landed: false }
 }
 
 export type PersonListItem = {
@@ -78,9 +97,10 @@ type PersonRow = {
 function toListItem(r: PersonRow, renames: Map<string, string>): PersonListItem {
   const d = dataOf(r)
   const pend = applyPending(r.id, r.label, renames)
-  // first/last from the corrected name when a rename is pending, else from the
-  // miner-persisted first/last (falling back to splitting the label).
-  const fl = pend.pending ? splitName(pend.name) : firstLast(r.label, d)
+  // first/last from the corrected name when a rename is pending OR has just landed
+  // (so the display tracks the rename, not a possibly-stale data.first_name), else
+  // from the miner-persisted first/last (falling back to splitting the label).
+  const fl = pend.pending || pend.landed ? splitName(pend.name) : firstLast(r.label, d)
   return {
     id: r.id,
     name: personDisplay(fl.first, fl.last) || pend.name,
@@ -163,7 +183,7 @@ export async function getPersonDetail(deps: RetrievalDeps, id: string): Promise<
     pendingRenames(deps),
   ])
   const pend = applyPending(row.id, row.label, renames)
-  const fl = pend.pending ? splitName(pend.name) : firstLast(row.label, dataOf(row))
+  const fl = pend.pending || pend.landed ? splitName(pend.name) : firstLast(row.label, dataOf(row))
   return {
     id: row.id,
     name: personDisplay(fl.first, fl.last) || pend.name,

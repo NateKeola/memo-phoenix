@@ -57,6 +57,7 @@ async function main() {
     check('rewriteLabel maps "Karalea" to "Kara Lee"', rewriteLabel(rw, 'Karalea') === 'Kara Lee')
     check('a "Karalea" node now resolves to the Kara Lee id', pid(rewriteLabel(rw, 'Karalea')) === pid('Kara Lee'))
     check('loser id(Karalea) maps to the SURVIVOR LABEL "Kara Lee"', rw.loserToSurvivorLabel.get(pid('Karalea')) === 'Kara Lee')
+    check('a rename IS a renameTargets in-place relabel', rw.renameTargets.get(pid('Karalea')) === 'Kara Lee')
     // the payload's person_id (the row the user targeted) wins over the label hash
     const rwId = buildPeopleRewrite(userId, [
       corr('rename_person', { from_label: 'Karalea', to_label: 'Kara Lee', person_id: 'aaaaaaaa-0000-0000-0000-000000000001' }, 2),
@@ -71,6 +72,10 @@ async function main() {
     const rw = buildPeopleRewrite(userId, [corr('merge_people', { from_label: 'Mike', into_label: 'Michael Smith' }, 1)])
     check('merge rewrites the loser onto the survivor label', rewriteLabel(rw, 'Mike') === 'Michael Smith')
     check('merge records loser id -> survivor LABEL', rw.loserToSurvivorLabel.get(pid('Mike')) === 'Michael Smith')
+    // A merge loser must NEVER be an in-place relabel target: relabeling it in place
+    // (when the into row is absent) would corrupt a distinct person (review finding).
+    check('a merge loser is NOT in renameTargets', !rw.renameTargets.has(pid('Mike')))
+    check('a merge adds no renameTargets at all', rw.renameTargets.size === 0)
   }
 
   console.log('\n== chained corrections collapse to a fixpoint (A->B, B->C) ==')
@@ -82,6 +87,10 @@ async function main() {
     check('A resolves all the way to C', rewriteLabel(rw, 'A') === 'C')
     check('B resolves to C', rewriteLabel(rw, 'B') === 'C')
     check('both id(A) and id(B) are losers of label C', rw.loserToSurvivorLabel.get(pid('A')) === 'C' && rw.loserToSurvivorLabel.get(pid('B')) === 'C')
+    // A(rename)->B->C: id(A) is a rename target (in-place ok); id(B) came from a
+    // merge (B->C), so it must NOT be an in-place relabel.
+    check('chained: rename source A IS a renameTarget (-> C)', rw.renameTargets.get(pid('A')) === 'C')
+    check('chained: merge source B is NOT a renameTarget', !rw.renameTargets.has(pid('B')))
   }
 
   console.log('\n== guards ==')

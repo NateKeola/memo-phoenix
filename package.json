@@ -16,6 +16,7 @@
     "db:apply": "node scripts/db.mjs apply",
     "smoke": "node scripts/smoke.mjs",
     "check:obs": "node scripts/check-obs-db.mjs",
+    "check:rename": "tsx scripts/check-rename-fix.ts",
     "prompts:generate": "node packages/miner-core/scripts/generate-prompts.mjs",
     "bible:generate": "node scripts/generate-bible.mjs",
     "miner": "tsx packages/miner-core/src/cli.ts",

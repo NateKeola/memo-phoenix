@@ -132,3 +132,34 @@ export async function setFollowupTracking(input: {
   revalidatePath('/companion')
   return { ok: true }
 }
+
+// User-set work/personal tag on an event. Like the person tag, but user-classified
+// via the event_tags OVERLAY (never a canonical edit; the miner owns canonical).
+// value null clears the tag (deletes the overlay row). Keyed on the canonical event
+// id, RLS-scoped to the signed-in user.
+export async function setEventTag(input: {
+  eventId: string
+  workOrPersonal: 'work' | 'personal' | null
+}): Promise<StateResult> {
+  const auth = await authorizeAction()
+  if (!auth.ok) return { ok: false, error: auth.reason === 'forbidden' ? 'not authorized' : 'unauthorized' }
+  const { supabase, user } = auth
+  if (!input.eventId) return { ok: false, error: 'missing event' }
+  const value = input.workOrPersonal
+  if (value !== null && value !== 'work' && value !== 'personal') return { ok: false, error: 'bad tag' }
+
+  if (value === null) {
+    const { error } = await supabase.from('event_tags').delete().eq('user_id', user.id).eq('event_id', input.eventId)
+    if (error) return { ok: false, error: error.message }
+  } else {
+    const { error } = await supabase.from('event_tags').upsert(
+      { user_id: user.id, event_id: input.eventId, work_or_personal: value, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id,event_id' }
+    )
+    if (error) return { ok: false, error: error.message }
+  }
+
+  await logEvent({ user_id: user.id, event_type: 'event_tag', name: value ?? 'cleared', attrs: { event_id: input.eventId } })
+  revalidatePath('/companion')
+  return { ok: true }
+}
