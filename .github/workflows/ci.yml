@@ -44,3 +44,7 @@ jobs:
       - run: npx tsx scripts/check-freshness.ts
       - run: npx tsx scripts/check-streaming.ts
       - run: npx tsx scripts/check-mic.ts
+      # Source-level API/agent isolation (no DB, no secrets): every route auth-gated
+      # before data, forged id operator-gated, obs console admin-only, agent context
+      # RLS-scoped. The live isolation guards (npm run security) stay operator-run.
+      - run: node scripts/check-api-isolation.mjs
