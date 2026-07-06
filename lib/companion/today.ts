@@ -37,7 +37,14 @@ export type FollowUp = {
   sourceClaimIds: string[]
 }
 
-export type UpcomingEvent = { id: string; label: string | null; date: string | null; location: string | null }
+export type UpcomingEvent = {
+  id: string
+  label: string | null
+  date: string | null
+  location: string | null
+  // user-set work/personal tag (event_tags overlay), null when untagged
+  workOrPersonal: string | null
+}
 
 export type Today = {
   overdue: FollowUp[]
@@ -117,7 +124,7 @@ async function loadPeople(
 export async function getToday(deps: RetrievalDeps, nowMs: number): Promise<Today> {
   const { supabase, userId } = deps
   // One parallel batch (no waterfall): commitments, events, overlay, nudges, people.
-  const [{ data: commitmentData, error: cErr }, { data: eventData }, overlay, nudges, peopleData] =
+  const [{ data: commitmentData, error: cErr }, { data: eventData }, { data: eventTagData }, overlay, nudges, peopleData] =
     await Promise.all([
       supabase.from('canonical_commitments').select('id, label, data, source_claim_ids').eq('user_id', userId).is('valid_to', null),
       supabase
@@ -127,6 +134,8 @@ export async function getToday(deps: RetrievalDeps, nowMs: number): Promise<Toda
         .is('valid_to', null)
         .order('created_at', { ascending: false })
         .limit(25),
+      // user-set work/personal tags on events (overlay; missing table degrades to []).
+      supabase.from('event_tags').select('event_id, work_or_personal').eq('user_id', userId),
       readOverlay(supabase, userId),
       relationshipNudges(deps, nowMs),
       loadPeople(supabase, userId),
@@ -213,11 +222,16 @@ export async function getToday(deps: RetrievalDeps, nowMs: number): Promise<Toda
   const snoozed = withProv.filter((i) => i.futureSnoozed).map(finalize)
   const allFollowUps = withProv.map(finalize)
 
+  const eventTag = new Map<string, string>()
+  for (const t of (eventTagData ?? []) as Array<{ event_id: string; work_or_personal: string }>) {
+    if (t.event_id && t.work_or_personal) eventTag.set(t.event_id, t.work_or_personal)
+  }
   const upcomingEvents: UpcomingEvent[] = ((eventData ?? []) as CommitmentRow[]).map((e) => ({
     id: e.id,
     label: e.label,
     date: str((e.data ?? {}).date),
     location: str((e.data ?? {}).location),
+    workOrPersonal: eventTag.get(e.id) ?? null,
   }))
 
   return {

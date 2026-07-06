@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { FollowUp, Today, UpcomingEvent } from '@/lib/companion/today'
 import type { RelationshipNudge } from '@/lib/companion/nudges'
-import { setCommitmentState, setFollowupTracking } from '@/app/companion/actions'
+import { setCommitmentState, setFollowupTracking, setEventTag } from '@/app/companion/actions'
 import { ContextAdder } from '@/components/context-adder'
 
 type PersonOpt = { id: string; name: string }
@@ -508,15 +508,62 @@ function Upcoming({ events }: { events: UpcomingEvent[] }) {
   return (
     <section style={{ marginTop: 22 }}>
       <h2 style={{ fontSize: 15, color: ACCENT }}>Coming up</h2>
-      <ul style={{ display: 'grid', gap: 4, paddingLeft: 18, color: MUTED }}>
+      <ul style={{ display: 'grid', gap: 10, listStyle: 'none', padding: 0, margin: '8px 0 0' }}>
         {events.map((e) => (
-          <li key={e.id}>
-            {e.label}
-            {e.date ? <span> ({String(e.date)})</span> : null}
-            {e.location ? <span> at {String(e.location)}</span> : null}
-          </li>
+          <EventRow key={e.id} event={e} />
         ))}
       </ul>
     </section>
+  )
+}
+
+// One upcoming event with a user-set work/personal tag. The tag is stored in the
+// event_tags OVERLAY (never canonical), mirroring the work/personal tag people have.
+// Tapping the active tag clears it. Optimistic + router.refresh, same idiom as the
+// commitment state buttons.
+function EventRow({ event }: { event: UpcomingEvent }) {
+  const router = useRouter()
+  const [tag, setTag] = useState<string | null>(event.workOrPersonal)
+  const [busy, setBusy] = useState(false)
+
+  async function choose(value: 'work' | 'personal') {
+    if (busy) return
+    const next = tag === value ? null : value // tapping the active tag clears it
+    setBusy(true)
+    setTag(next)
+    try {
+      const res = await setEventTag({ eventId: event.id, workOrPersonal: next })
+      if (!res.ok) throw new Error(res.error || 'could not tag')
+      router.refresh()
+    } catch {
+      setTag(event.workOrPersonal) // revert on failure
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const pill = (value: 'work' | 'personal') => ({
+    ...(tag === value ? accentBtn : btn),
+    padding: '3px 10px',
+    fontSize: 12,
+    opacity: busy ? 0.6 : 1,
+  })
+
+  return (
+    <li style={{ color: MUTED }}>
+      <span>
+        {event.label}
+        {event.date ? <span> ({String(event.date)})</span> : null}
+        {event.location ? <span> at {String(event.location)}</span> : null}
+      </span>
+      <span style={{ display: 'inline-flex', gap: 6, marginLeft: 8, verticalAlign: 'middle' }}>
+        <button type="button" style={pill('work')} onClick={() => choose('work')} disabled={busy} aria-pressed={tag === 'work'}>
+          work
+        </button>
+        <button type="button" style={pill('personal')} onClick={() => choose('personal')} disabled={busy} aria-pressed={tag === 'personal'}>
+          personal
+        </button>
+      </span>
+    </li>
   )
 }
