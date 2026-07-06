@@ -1,7 +1,6 @@
 import { requireAllowedUser } from '@/lib/auth/guard'
 import { MinerControl } from '@/components/miner-control'
 import { PageHeader } from '@/components/page-header'
-import { BottomNav } from '@/components/bottom-nav'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,7 +18,6 @@ export default async function MinerPage() {
         Built by mining everything you have captured. Run it now, watch it work, and see what changed.
       </p>
       <MinerControl />
-      <BottomNav />
     </main>
   )
 }

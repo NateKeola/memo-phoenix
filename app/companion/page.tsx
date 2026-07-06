@@ -3,7 +3,6 @@ import { getToday } from '@/lib/companion/today'
 import { logEvent } from '@/lib/telemetry'
 import { CompanionView } from '@/components/companion/companion-view'
 import { PageHeader } from '@/components/page-header'
-import { BottomNav } from '@/components/bottom-nav'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,7 +29,6 @@ export default async function CompanionPage() {
       <div style={{ marginTop: 18 }}>
         <CompanionView today={today} />
       </div>
-      <BottomNav />
     </main>
   )
 }

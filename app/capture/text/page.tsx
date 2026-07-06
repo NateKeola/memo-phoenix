@@ -5,10 +5,10 @@ import { CaptureTextForm } from '@/components/capture-text-form'
 export default async function AddTextPage({
   searchParams,
 }: {
-  searchParams: Promise<{ ok?: string; error?: string }>
+  searchParams: Promise<{ ok?: string; error?: string; target_kind?: string; target_id?: string }>
 }) {
   await requireAllowedUser()
-  const { ok, error } = await searchParams
+  const { ok, error, target_kind: targetKind, target_id: targetId } = await searchParams
 
   return (
     <main className="mp-page mp-page--flush" style={{ maxWidth: 560 }}>
@@ -20,7 +20,7 @@ export default async function AddTextPage({
       {ok ? <p className="mp-ok mp-rise" style={{ marginTop: 14 }}>Captured.</p> : null}
       {error ? <p className="mp-bad mp-rise" style={{ marginTop: 14 }}>{error}</p> : null}
 
-      <CaptureTextForm />
+      <CaptureTextForm targetKind={targetKind} targetId={targetId} />
     </main>
   )
 }

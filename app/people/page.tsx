@@ -2,7 +2,6 @@ import { requireAllowedUser } from '@/lib/auth/guard'
 import { listPeople } from '@/lib/people'
 import { PeopleList } from '@/components/people-list'
 import { PageHeader } from '@/components/page-header'
-import { BottomNav } from '@/components/bottom-nav'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,7 +25,6 @@ export default async function PeoplePage() {
       ) : (
         <PeopleList people={people} />
       )}
-      <BottomNav />
     </main>
   )
 }

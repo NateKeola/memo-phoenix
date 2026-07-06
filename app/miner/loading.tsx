@@ -1,5 +1,4 @@
 import { PageHeader } from '@/components/page-header'
-import { BottomNav } from '@/components/bottom-nav'
 import { Skel } from '@/components/skeleton'
 
 export default function Loading() {

@@ -5,16 +5,22 @@ import { useState } from 'react'
 import { IconPlus, IconInterview, IconMic, IconText } from '@/components/icons'
 
 // The always-reachable capture entry: a gold + (the FAB) that opens the three
-// distinct paths. Separate flows, not one merged input. Same routes and toggle as
-// before; the look is the warm-notebook capture menu.
-const PATHS = [
-  { href: '/capture/interview', label: 'Interview', Icon: IconInterview },
-  { href: '/capture/memo', label: 'Memo', Icon: IconMic },
-  { href: '/capture/text', label: 'Text', Icon: IconText },
-]
-
-export function CaptureMenu() {
+// distinct paths. Separate flows, not one merged input.
+//
+// personId (set by AppChrome only on a person's profile) makes the FAB
+// context-aware: the capture is tagged with that person as a hint the miner consumes
+// at extraction (target metadata on the capture, never a graph edit). Memo + Text
+// take target_kind/target_id; interview takes target/id (the conventions the existing
+// capture routes + ContextAdder already parse). Absent personId = context-free.
+export function CaptureMenu({ personId }: { personId?: string }) {
   const [open, setOpen] = useState(false)
+  const tq = personId ? `?target_kind=person&target_id=${personId}&source=fab_person` : ''
+  const iq = personId ? `?target=person&id=${personId}&source=fab_person` : ''
+  const PATHS = [
+    { href: `/capture/interview${iq}`, label: 'Interview', Icon: IconInterview },
+    { href: `/capture/memo${tq}`, label: 'Memo', Icon: IconMic },
+    { href: `/capture/text${tq}`, label: 'Text', Icon: IconText },
+  ]
   return (
     <>
       {open ? <div className="mp-scrim" onClick={() => setOpen(false)} aria-hidden /> : null}

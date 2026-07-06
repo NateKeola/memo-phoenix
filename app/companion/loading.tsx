@@ -1,5 +1,4 @@
 import { PageHeader } from '@/components/page-header'
-import { BottomNav } from '@/components/bottom-nav'
 import { Skel } from '@/components/skeleton'
 
 export default function Loading() {
@@ -13,7 +12,6 @@ export default function Loading() {
         <div className="mp-card"><Skel w="55%" h={16} /><Skel w="45%" h={12} style={{ marginTop: 10 }} /></div>
         <div className="mp-card"><Skel w="50%" h={16} /><Skel w="35%" h={12} style={{ marginTop: 10 }} /></div>
       </div>
-      <BottomNav />
     </main>
   )
 }

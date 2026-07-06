@@ -1,6 +1,4 @@
 import Link from 'next/link'
-import { CaptureMenu } from '@/components/capture-menu'
-import { BottomNav } from '@/components/bottom-nav'
 import { BrandSeed } from '@/components/brand-seed'
 import { isOperator } from '@/lib/auth/operator'
 import { requireAllowedUser } from '@/lib/auth/guard'
@@ -82,8 +80,6 @@ export default async function HomePage() {
         </div>
       </div>
 
-      <CaptureMenu />
-      <BottomNav />
     </main>
   )
 }
