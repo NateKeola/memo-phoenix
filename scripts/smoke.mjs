@@ -26,6 +26,7 @@ const steps = [
   ['multi-user isolation', 'check-multiuser.mjs'],
   ['invite allowlist', 'check-invite.mjs'],
   ['observability store', 'check-obs-db.mjs'],
+  ['avatar + profile isolation', 'check-avatar-isolation.mjs'],
 ]
 
 const results = []

@@ -469,6 +469,9 @@ a:hover { text-decoration: underline; text-decoration-color: var(--accent-deep);
 }
 .mp-avatar--sm { width: 36px; height: 36px; font-size: 15px; }
 .mp-avatar--lg { width: 70px; height: 70px; font-size: 30px; font-weight: 400; }
+.mp-avatar--xl { width: 104px; height: 104px; font-size: 42px; font-weight: 400; }
+/* When an avatar holds a photo, the image fills and clips to the circle. */
+.mp-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block; }
 
 /* The dandelion mark as a small inline glyph (the agent's chat avatar). */
 .mp-mark {
