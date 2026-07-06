@@ -27,11 +27,14 @@ export default async function HomePage() {
   return (
     <main className="mp-page" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <header className="mp-top">
-        <span className="mp-avatar" aria-hidden>{initial}</span>
+        <Link href="/settings" aria-label="Settings" title="Settings">
+          <span className="mp-avatar" aria-hidden>{initial}</span>
+        </Link>
         <span style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           {isOperator(user) ? (
             <Link href="/admin" className="mp-meta" style={{ color: 'var(--txt-muted)' }}>Invites</Link>
           ) : null}
+          <Link href="/settings" className="mp-meta" style={{ color: 'var(--txt-muted)' }}>Settings</Link>
           <form action="/auth/signout" method="post">
             <button type="submit" className="mp-meta" style={{ border: 0, background: 'none', cursor: 'pointer', color: 'var(--txt-faint)' }}>
               Sign out
