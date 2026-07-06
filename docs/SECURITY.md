@@ -1,18 +1,34 @@
 # Security report: multi-user boundary (B1 gate)
 
 This is the certifying artifact for the row-level-security boundary. It records the
-state proven before any second real user's data enters the database. Re-run the two
-committed checks any time the schema or auth config changes:
+state proven before any second real user's data enters the database.
+
+**Run the whole cross-user security harness in one command before onboarding new
+users** (see §8 for what it proves):
 
 ```
-node scripts/check-rls.mjs         # RLS state from the live DB (60 assertions)
-node scripts/check-multiuser.mjs   # two real users, behavioral isolation (app/RLS paths)
-node scripts/check-miner-isolation.ts  # two users, the service-role MINER path (tsx)
+npm run security   # every surface: tables, storage, miner, API routes,
+                   # observability, agent context, anon-blocked. Pass/fail per
+                   # surface, no residue.
 ```
 
-Verified against the dev project `azlobwtiptvarfeukzcv` on 2026-06-19. Result: the
-data boundary holds under real two-user conditions. One access-control gap was
-found (public signups were enabled) and fixed (disabled).
+It runs, and you can also run individually:
+
+```
+node scripts/check-rls.mjs              # RLS state from the live DB
+node scripts/check-table-isolation.mjs  # EVERY per-user table: a fresh user + anon read 0
+node scripts/check-multiuser.mjs        # two real users, behavioral isolation
+node scripts/check-avatar-isolation.mjs # storage bucket + user_profiles isolation
+node scripts/check-miner-isolation.ts   # the service-role MINER path (tsx)
+node scripts/check-api-isolation.mjs    # API routes + admin gate + agent context (source)
+node scripts/check-obs-db.mjs           # observability store + privacy
+node scripts/check-invite.mjs           # signups disabled, allowlist
+```
+
+Verified against the project `azlobwtiptvarfeukzcv` on 2026-06-19 (B1) and re-proven
+comprehensively on 2026-07-06 (§8). Result: the data boundary holds under real
+two-user conditions across every surface. The one access-control gap ever found
+(public signups were enabled) was fixed (disabled).
 
 ## 1. Every table and its RLS state
 
@@ -219,3 +235,72 @@ The data-isolation gate passes. The one access-control gap (open signups) is clo
 | 11 | Dedicated two-way miner isolation guard | n/a | Added (`check-miner-isolation.ts`, 33/33) |
 
 The service-role miner path is now audited and guarded for per-user isolation.
+
+## 8. Comprehensive cross-user harness (2026-07-06, pre-testing-phase)
+
+Before onboarding more real users, the whole boundary was re-proven across every
+surface with one command, `npm run security` (`scripts/security.mjs`), which runs the
+guards below and reports PASS/FAIL per surface. Full run: **8/8 surfaces PASS, 231
+assertions, no residue.** No isolation gap was found, so no surface needed a fix.
+
+The public schema now has **35 tables, all with a `user_id` column, all FORCE RLS +
+per-user policies** (up from 28 at B1; the additions since are `capture_exclusions`,
+`collections`/`collection_items`, `entity_aliases`, `event_tags`, `user_profiles`,
+`observability_events`, `discrepancies`, `open_threads`, and the 8 `raw_*` /
+canonical tables were already counted). `check-rls.mjs` auto-enumerates them (74
+assertions).
+
+What each surface proves:
+
+- **Every per-user table** (`check-table-isolation.mjs`, NEW): the table list is read
+  from the live catalog, so new tables are covered automatically. A brand-new user B
+  (who owns nothing) and an anonymous client each read **zero rows from all 35
+  tables**; 28 of them currently hold the real user's data, so "0 for B" is a
+  concrete isolation proof, not a vacuous one. `observability_events` system rows
+  (nullable `user_id`) are invisible to a normal user. The `canonical_*` / `insights`
+  tables that feed the interview brief, companion, and daily brief show B nothing (no
+  agent-context bleed). Forged cross-user writes into `user_profiles` / `event_tags` /
+  `companion_state` are denied by RLS `with check`.
+- **Storage + profile** (`check-avatar-isolation.mjs`): the private `avatars` bucket
+  and `user_profiles` are per-user; a user can read/write only its own avatar object
+  and profile row, and can never upload/download/list/sign another user's; anon
+  blocked; no residue.
+- **Two-user behavioral** (`check-multiuser.mjs`): two real users, bidirectional
+  seed/read/forge on the representative mutable + canonical layer + the reconfirm view.
+- **Miner, strictly per-user** (`check-miner-isolation.ts`): the service-role miner
+  path (full + incremental, the resolver, `miner_state`/`miner_runs`) filters every
+  query by `user_id`; `assertUserId` hard-fails an unscoped run. See §7.
+- **API routes + admin gate + agent context** (`check-api-isolation.mjs`, NEW, also in
+  CI as it is pure source inspection): every API route authenticates before touching
+  data; a forged `userId` is honored ONLY for the operator on `/api/miner/run`, else
+  it falls back to the caller; the observability console is `isOperator`-gated and
+  redirects a non-operator; the brief / companion / interview builders read the
+  caller's own RLS-scoped client, never an admin/cross-user read.
+- **Observability store** (`check-obs-db.mjs`): shaped-only, privacy holds, health
+  rollup; the console admin-gate is asserted above and the data-level "a normal user
+  reads 0 events" is asserted in `check-table-isolation`.
+- **Auth / invite allowlist** (`check-invite.mjs`): signups disabled, no anon-signup
+  bypass, allowlist admits/rejects.
+
+**Anonymous / unauthenticated access is blocked everywhere:** proven at the DB (anon
+reads 0 from every table) and at every API route (an auth gate precedes any data
+access).
+
+**Pre-existing test residue (not from this harness), noted:** the auth table holds 8
+`inc-harness-*@test.invalid` accounts from the 2026-06-30 incremental-equivalence
+harness (which clones the real corpus into throwaway users). They are fully
+RLS-isolated (the sweep above proves a fresh user sees 0 of their rows) and do not
+affect any real user, but they are clutter. They hold append-only `captures`, so
+their data cannot be fully deleted; the operator can retire the 8 auth accounts via
+the admin API if a pristine user list is wanted (their append-only rows would remain
+orphaned but stay RLS-isolated). This harness itself leaves no residue.
+
+| # | Surface | Guard | Result |
+|---|---------|-------|--------|
+| 12 | Every per-user table isolated (fresh user + anon read 0) | check-table-isolation.mjs | 12/12 |
+| 13 | Storage bucket + user_profiles isolated | check-avatar-isolation.mjs | 15/15 |
+| 14 | API routes auth-gated + forge-guarded + agent context RLS-scoped | check-api-isolation.mjs | 22/22 |
+| 15 | Observability console admin-only; non-admin reads 0 events | check-api-isolation + check-table-isolation | Verified |
+| 16 | One-command harness (all surfaces) | npm run security | 8/8 surfaces PASS |
+
+The cross-user boundary is proven across every surface. Safe to onboard new users.
