@@ -17,9 +17,18 @@ function SubmitButton() {
   )
 }
 
-export function CaptureTextForm() {
+// targetKind/targetId (set when the capture is started from a person's profile via
+// the context-aware FAB) ride along as hidden fields so the capture is tagged. The
+// miner consumes the tag at extraction; it is never a graph edit.
+export function CaptureTextForm({ targetKind, targetId }: { targetKind?: string; targetId?: string }) {
   return (
     <form action={addTextCapture} style={{ display: 'grid', gap: 12, marginTop: 18 }}>
+      {targetKind && targetId ? (
+        <>
+          <input type="hidden" name="target_kind" value={targetKind} />
+          <input type="hidden" name="target_id" value={targetId} />
+        </>
+      ) : null}
       <textarea name="body" rows={8} placeholder="What's on your mind?" required className="mp-textarea" />
       <input
         name="routing_hint"
