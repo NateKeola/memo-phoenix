@@ -1,7 +1,7 @@
 import { admin } from './supabase'
 import { extractCapture, type Capture } from './extract'
 import { runDerivation } from './derive'
-import { INCREMENTAL, runIncrementalDerivation } from './incremental'
+import { INCREMENTAL, runIncrementalDerivation, type IncrementalMode } from './incremental'
 import { readExcludedCaptureIds } from './stage-common'
 import { logEvent } from './telemetry'
 import { addUsage, emptyUsage, type PassResult, type Usage } from './types'
@@ -13,6 +13,11 @@ export type MineSummary = {
   passes: PassResult[]
   extractUsage: Usage
   durationMs: number
+  // Which derivation path ran and how many captures were folded, so the miner_runs
+  // summary (and the observability console) can show whether a routine mine was full
+  // or incremental. Non-incremental runs are always 'full'.
+  mode: IncrementalMode
+  newCaptures: number
 }
 
 // Full recompute for one user: extract every not-yet-extracted capture into the
@@ -76,9 +81,19 @@ export async function mine(
   // Default (MINER_INCREMENTAL unset): the full recompute, byte-for-byte unchanged.
   // ON: fold in only the not-yet-incorporated captures (the full recompute is still
   // used for the baseline and for corrections; see incremental.ts).
-  const passes = INCREMENTAL
-    ? await runIncrementalDerivation(userId, onStage)
-    : await runDerivation(userId, onStage)
+  let passes: PassResult[]
+  let mode: IncrementalMode
+  let newCaptures: number
+  if (INCREMENTAL) {
+    const r = await runIncrementalDerivation(userId, onStage)
+    passes = r.passes
+    mode = r.mode
+    newCaptures = r.newCaptures
+  } else {
+    passes = await runDerivation(userId, onStage)
+    mode = 'full'
+    newCaptures = captures.length
+  }
   await stage('finishing')
 
   const summary: MineSummary = {
@@ -88,6 +103,8 @@ export async function mine(
     passes,
     extractUsage,
     durationMs: 0,
+    mode,
+    newCaptures,
   }
 
   // run-level telemetry; durationMs is stamped by the caller's clock

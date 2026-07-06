@@ -29,7 +29,7 @@ export default async function ObservabilityPage() {
   const admin = createAdminClient()
   const [events, { data: runsRaw }, { data: invitesRaw }] = await Promise.all([
     readRecentObs(150),
-    admin.from('miner_runs').select('id, user_id, status, trigger, runtime, stage, started_at, ended_at, heartbeat_at, error').order('started_at', { ascending: false }).limit(8),
+    admin.from('miner_runs').select('id, user_id, status, trigger, runtime, stage, started_at, ended_at, heartbeat_at, error, summary').order('started_at', { ascending: false }).limit(8),
     admin.from('invites').select('email, status, invited_user_id, accepted_at, created_at').order('created_at', { ascending: false }).limit(20),
   ])
   const health = rollUpHealth(events, Date.now())
@@ -81,6 +81,7 @@ export default async function ObservabilityPage() {
               <li key={String(r.id)} className="mp-row" style={{ justifyContent: 'space-between' }}>
                 <span style={{ minWidth: 0 }}>
                   <span style={{ color: runColor(String(r.status)) }}>{effectiveRunStatus(r)}</span>
+                  {runMode(r) ? <span className="mp-tag mp-tag--accent" style={{ marginLeft: 6 }}>{runMode(r)}</span> : null}
                   <span className="mp-meta"> {String(r.trigger ?? '')}/{String(r.runtime ?? '')} {r.stage ? `· ${String(r.stage)}` : ''}</span>
                   {r.error ? <span className="mp-meta" style={{ display: 'block', color: 'var(--record-soft)' }}>{String(r.error).slice(0, 90)}</span> : null}
                 </span>
@@ -161,6 +162,17 @@ function runColor(s: string): string {
   if (s === 'done') return 'var(--ok)'
   if (s === 'error') return 'var(--record-soft)'
   return 'var(--accent-deep)'
+}
+// The derivation path this run took (from miner_runs.summary), so the operator can
+// confirm routine mines are incremental. Null for pre-Phase-2 runs (no mode field)
+// and for runs that never reached 'done' (no summary yet), which render without a
+// chip rather than a wrong one.
+function runMode(r: Record<string, unknown>): string | null {
+  const s = r.summary as { mode?: string; newCaptures?: number; captures?: number } | null | undefined
+  if (!s || typeof s.mode !== 'string') return null
+  if (s.mode === 'incremental') return `incremental · ${s.newCaptures ?? 0} new`
+  if (s.mode === 'noop') return 'no-op · up to date'
+  return `full · ${s.captures ?? 0} captures`
 }
 // Show a stalled run (running but no heartbeat for > 10 min) honestly.
 function effectiveRunStatus(r: Record<string, unknown>): string {

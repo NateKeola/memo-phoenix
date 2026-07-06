@@ -491,11 +491,15 @@ async function incRelationshipsPass(
 
 export type IncrementalMode = 'full' | 'incremental' | 'noop'
 
-// Returns the passes plus the mode taken, so the caller can log which path ran.
+export type IncrementalResult = { passes: PassResult[]; mode: IncrementalMode; newCaptures: number }
+
+// Returns the passes plus the mode taken and how many captures were folded, so the
+// caller (mine -> the miner_runs summary -> the observability console) can show
+// whether a routine mine ran full or incremental.
 export async function runIncrementalDerivation(
   userId: string,
   onStage?: (stage: string) => Promise<void>
-): Promise<PassResult[]> {
+): Promise<IncrementalResult> {
   const stage = async (s: string) => {
     if (onStage) await onStage(s)
   }
@@ -528,7 +532,7 @@ export async function runIncrementalDerivation(
         new_captures: unincorporated.length,
       },
     })
-    return passes
+    return { passes, mode: 'full', newCaptures: unincorporated.length }
   }
 
   // --- NO-OP: nothing new. Keep decay anchors / salience current (cheap), else idle.
@@ -542,7 +546,7 @@ export async function runIncrementalDerivation(
       name: 'incremental',
       attrs: { stage: 'incremental', mode: 'noop', captures: captures.length, new_captures: 0, ...recon },
     })
-    return []
+    return { passes: [], mode: 'noop', newCaptures: 0 }
   }
 
   // --- INCREMENTAL: fold in only the unincorporated captures ---
@@ -683,5 +687,5 @@ export async function runIncrementalDerivation(
     },
   })
 
-  return results
+  return { passes: results, mode: 'incremental', newCaptures: unincorporated.length }
 }
