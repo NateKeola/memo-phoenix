@@ -212,6 +212,51 @@ export async function supersedeLosers(userId: string, loserToSurvivor: Map<strin
   return superseded
 }
 
+// Force the target label onto a rename that resolved IN PLACE. The stable-identity
+// resolver keeps a row's id when the rename target is already one of its aliases or a
+// close fuzzy match (a typo fix like "Sean Yanka" -> "Sean Janka", or the Karalea
+// case once "Karalea" is a known alias). The people pass sets the row's label to the
+// target, but writeCanonical's change-signature deliberately EXCLUDES the label (LLM
+// label-casing churn control), so a pure relabel with an unchanged claim set is
+// treated as "unchanged" and skipped, and the rename would never land in canonical.
+// This applies it directly. It only touches CURRENT rows whose label still differs
+// (a superseded loser from a real merge is left retired, and it is a clean no-op once
+// applied). idToFinalLabel is the rewrite's loser-id -> final-survivor-label map,
+// whose in-place entries are exactly the rows that keep their id.
+export async function applyRenameLabels(userId: string, idToFinalLabel: Map<string, string>): Promise<number> {
+  if (idToFinalLabel.size === 0) return 0
+  const ids = Array.from(idToFinalLabel.keys())
+  let relabeled = 0
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200)
+    const { data, error } = await admin()
+      .from(PEOPLE_TABLE)
+      .select('id, label, data')
+      .eq('user_id', userId)
+      .is('valid_to', null)
+      .in('id', chunk)
+    if (error) throw new Error(`[miner] read people for rename label: ${error.message}`)
+    for (const r of (data ?? []) as Array<{ id: string; label: string | null; data: Record<string, unknown> | null }>) {
+      const finalLabel = idToFinalLabel.get(String(r.id))
+      if (!finalLabel) continue
+      if (normalizeLabel(r.label ?? '') === normalizeLabel(finalLabel)) continue // already applied
+      const d = r.data ?? {}
+      const split = splitName(finalLabel)
+      // keep the old surface form as an alias so the row is still searchable by it
+      const aliases = uniqArray([...(Array.isArray(d.aliases) ? d.aliases : []), ...(r.label ? [r.label] : [])])
+      const { error: uerr } = await admin()
+        .from(PEOPLE_TABLE)
+        .update({ label: finalLabel, data: { ...d, first_name: split.first, last_name: split.last, aliases } })
+        .eq('user_id', userId)
+        .eq('id', r.id)
+        .is('valid_to', null)
+      if (uerr) throw new Error(`[miner] apply rename label ${r.id}: ${uerr.message}`)
+      relabeled++
+    }
+  }
+  return relabeled
+}
+
 // Retire current relationship edges that still reference a loser person id. The
 // re-resolution emits the survivor edge under a new id, so the stale loser edge is
 // what is left to retire. A no-op when there are no losers.

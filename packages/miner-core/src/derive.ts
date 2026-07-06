@@ -1,5 +1,6 @@
 import { canonicalId, canonicalPersonId, normalizeLabel, splitName } from './identity'
 import {
+  applyRenameLabels,
   buildPeopleRewrite,
   readPeopleCorrections,
   repointReferences,
@@ -555,6 +556,13 @@ export async function runDerivation(
   const loserToSurvivor = await resolveSurvivorIds(userId, peopleRewrite.loserToSurvivorLabel)
   const losersSuperseded = await supersedeLosers(userId, loserToSurvivor)
 
+  // Force the target label onto a rename that resolved in place (same id kept; the
+  // change-signature excludes the label, so a pure relabel is otherwise skipped and
+  // the rename never lands). Runs AFTER supersedeLosers so a real merge's loser is
+  // already retired and left alone, and BEFORE the downstream context read so B and C
+  // see the corrected label. Idempotent no-op once applied.
+  const renamesApplied = await applyRenameLabels(userId, peopleRewrite.loserToSurvivorLabel)
+
   // Resolved Stage A node set, used as reference context for B and C.
   const aNodes = [
     ...(await readCanonicalNodes(userId, 'canonical_people')),
@@ -635,6 +643,7 @@ export async function runDerivation(
         rewrites: peopleRewrite.labelToFinal.size,
         losers: loserToSurvivor.size,
         losers_superseded: losersSuperseded,
+        renames_applied: renamesApplied,
         relationships_retired: relationshipsRetired,
         references_repointed: referencesRepointed,
       },
