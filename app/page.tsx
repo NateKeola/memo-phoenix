@@ -4,6 +4,7 @@ import { BottomNav } from '@/components/bottom-nav'
 import { BrandSeed } from '@/components/brand-seed'
 import { isOperator } from '@/lib/auth/operator'
 import { requireAllowedUser } from '@/lib/auth/guard'
+import { getProfile } from '@/lib/profile'
 
 export default async function HomePage() {
   // Authenticate + enforce the allowlist (the security boundary; middleware is UX
@@ -14,21 +15,29 @@ export default async function HomePage() {
   // captures the user has yet (so a brand-new user gets a get-started hint rather
   // than a bare nav), and the people count for the home stat line. All RLS-scoped
   // read-only counts; the app is never a silent, unexplained empty shell.
-  const [{ data: activeRun }, { count: captureCount }, { count: peopleCount }] = await Promise.all([
+  const [{ data: activeRun }, { count: captureCount }, { count: peopleCount }, profile] = await Promise.all([
     supabase.from('miner_runs').select('id, status').eq('user_id', user.id).eq('status', 'running').limit(1).maybeSingle(),
     supabase.from('captures').select('id', { count: 'exact', head: true }).eq('user_id', user.id),
     supabase.from('canonical_people').select('id', { count: 'exact', head: true }).eq('user_id', user.id).is('valid_to', null),
+    getProfile(supabase, user),
   ])
   const notes = captureCount ?? 0
   const people = peopleCount ?? 0
   const isNew = notes === 0 && !activeRun
-  const initial = (user.email ?? '?').trim().charAt(0).toUpperCase() || '?'
+  const initial = profile.initial
 
   return (
     <main className="mp-page" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <header className="mp-top">
-        <Link href="/settings" aria-label="Settings" title="Settings">
-          <span className="mp-avatar" aria-hidden>{initial}</span>
+        <Link href="/settings" aria-label="Profile and settings" title="Profile">
+          <span className="mp-avatar" aria-hidden>
+            {profile.avatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={profile.avatarUrl} alt="" />
+            ) : (
+              initial
+            )}
+          </span>
         </Link>
         <span style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           {isOperator(user) ? (

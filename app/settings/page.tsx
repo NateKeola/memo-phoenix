@@ -2,35 +2,40 @@ import Link from 'next/link'
 import { requireAllowedUser } from '@/lib/auth/guard'
 import { isOperator } from '@/lib/auth/operator'
 import { PageHeader } from '@/components/page-header'
+import { getProfile } from '@/lib/profile'
+import { ProfileEditor } from '@/components/profile-editor'
 
 export const dynamic = 'force-dynamic'
 
-// Settings / profile. User-owned account metadata only (name, email, entry points);
-// nothing here reads or writes canonical. The observability console link is shown
-// ONLY to the operator (isOperator), matching the admin-only gate on the console
-// itself; a regular user never sees it.
+// The profile / settings screen. A centered, personalizable profile (photo + display
+// name), then the memory links, the operator-only observability/invites links, and
+// sign out. Everything here is user-owned metadata (user_profiles + the private
+// avatars bucket); nothing reads or writes canonical. The observability link is shown
+// ONLY to the operator (isOperator), matching the console's own admin-only gate.
 export default async function SettingsPage() {
-  const { user } = await requireAllowedUser()
-  const name = process.env.MEMO_USER_NAME || user.email?.split('@')[0] || 'You'
-  const initial = (name || user.email || '?').trim().charAt(0).toUpperCase() || '?'
+  const { supabase, user } = await requireAllowedUser()
+  const profile = await getProfile(supabase, user)
   const operator = isOperator(user)
 
   return (
-    <main className="mp-page" style={{ maxWidth: 640 }}>
+    <main className="mp-page" style={{ maxWidth: 520, marginLeft: 'auto', marginRight: 'auto' }}>
       <PageHeader back="/" backLabel="Home" />
-      <h1 className="mp-h1">Settings</h1>
 
-      {/* Profile */}
-      <section className="mp-card" style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 16 }}>
-        <span className="mp-avatar mp-avatar--lg" aria-hidden>{initial}</span>
-        <span style={{ minWidth: 0 }}>
-          <span style={{ display: 'block', fontWeight: 500, fontSize: 18 }}>{name}</span>
-          <span className="mp-meta">{user.email}</span>
-        </span>
+      {/* Profile, centered */}
+      <section style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', marginTop: 6 }}>
+        <p className="mp-eyebrow">Profile</p>
+        <div style={{ marginTop: 16, width: '100%' }}>
+          <ProfileEditor
+            displayName={profile.displayName}
+            avatarUrl={profile.avatarUrl}
+            initial={profile.initial}
+            email={user.email ?? ''}
+          />
+        </div>
       </section>
 
       {/* Your memory */}
-      <section style={{ marginTop: 26 }}>
+      <section style={{ marginTop: 32 }}>
         <p className="mp-eyebrow">Your memory</p>
         <ul className="mp-list" style={{ marginTop: 10 }}>
           <SettingLink href="/capture/interview" title="Talk with Memo" sub="Start an interview to add context in your own words." />
@@ -51,9 +56,8 @@ export default async function SettingsPage() {
       ) : null}
 
       {/* Account */}
-      <section style={{ marginTop: 26 }}>
-        <p className="mp-eyebrow">Account</p>
-        <form action="/auth/signout" method="post" style={{ marginTop: 10 }}>
+      <section style={{ marginTop: 28, display: 'flex', justifyContent: 'center' }}>
+        <form action="/auth/signout" method="post">
           <button type="submit" className="mp-btn mp-btn--ghost">Sign out</button>
         </form>
       </section>
