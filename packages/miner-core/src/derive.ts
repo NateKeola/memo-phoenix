@@ -558,10 +558,13 @@ export async function runDerivation(
 
   // Force the target label onto a rename that resolved in place (same id kept; the
   // change-signature excludes the label, so a pure relabel is otherwise skipped and
-  // the rename never lands). Runs AFTER supersedeLosers so a real merge's loser is
-  // already retired and left alone, and BEFORE the downstream context read so B and C
-  // see the corrected label. Idempotent no-op once applied.
-  const renamesApplied = await applyRenameLabels(userId, peopleRewrite.loserToSurvivorLabel)
+  // the rename never lands). Uses renameTargets (rename_person ONLY): a merge loser
+  // must never be relabeled in place (it is superseded onto the into row, or left
+  // current when that row is absent; relabeling would corrupt a distinct person). A
+  // rename whose target resolved to a distinct existing row is superseded by
+  // supersedeLosers above, so this reads only current rows and skips it. Runs BEFORE
+  // the downstream context read so B and C see the corrected label. Idempotent.
+  const renamesApplied = await applyRenameLabels(userId, peopleRewrite.renameTargets)
 
   // Resolved Stage A node set, used as reference context for B and C.
   const aNodes = [

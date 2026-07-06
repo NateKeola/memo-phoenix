@@ -61,6 +61,15 @@ export type PeopleRewrite = {
   // superseded_by pointer (the Morgan case: the loser was retired onto a survivor
   // id that never materialized).
   loserToSurvivorLabel: Map<string, string>
+  // ONLY the rename_person in-place targets: targeted-row-id -> final label. Used by
+  // applyRenameLabels to force a pure relabel that writeCanonical would skip. It must
+  // NOT include merge losers: a merge's from-row is superseded onto a DIFFERENT into
+  // row (or, when the into row does not materialize this run, deliberately left
+  // current by resolveSurvivorIds); relabeling it in place would corrupt a distinct
+  // person and defeat that guard. A rename whose target resolves to a distinct
+  // existing row is still safe: that row is superseded, so applyRenameLabels'
+  // valid_to filter skips it.
+  renameTargets: Map<string, string>
   // fingerprint of the applied corrections, '' when there are none (busts the
   // people pass memo when a new correction is issued)
   fingerprint: string
@@ -104,11 +113,14 @@ function fromTo(c: CorrectionRow): { from: string; to: string; fromId: string } 
 export function buildPeopleRewrite(userId: string, corrections: CorrectionRow[]): PeopleRewrite {
   const edge = new Map<string, string>() // normalized from -> to (display form)
   const fromIds = new Map<string, string>() // normalized from -> the targeted row id
+  const renameFroms = new Set<string>() // normalized from-labels that came from a rename_person
   for (const c of corrections) {
     const ft = fromTo(c)
     if (!ft) continue
-    edge.set(normalizeLabel(ft.from), ft.to)
-    if (ft.fromId) fromIds.set(normalizeLabel(ft.from), ft.fromId)
+    const fromNorm = normalizeLabel(ft.from)
+    edge.set(fromNorm, ft.to)
+    if (ft.fromId) fromIds.set(fromNorm, ft.fromId)
+    if (c.kind === 'rename_person') renameFroms.add(fromNorm)
   }
 
   const resolveFinal = (startNorm: string): string => {
@@ -134,18 +146,23 @@ export function buildPeopleRewrite(userId: string, corrections: CorrectionRow[])
   // people pass by resolveSurvivorIds, so supersession can never point at an id
   // that does not exist.
   const loserToSurvivorLabel = new Map<string, string>()
+  const renameTargets = new Map<string, string>()
   for (const [fromNorm, finalLabel] of labelToFinal) {
     if (normalizeLabel(finalLabel) === fromNorm) continue // chain landed back on itself
     const lf = splitName(fromNorm)
     const loserId = fromIds.get(fromNorm) || canonicalPersonId(userId, lf.first, lf.last)
     loserToSurvivorLabel.set(loserId, finalLabel)
+    // Only a rename_person target is an in-place relabel; a merge loser must never be
+    // relabeled (it is superseded onto the into row, or left current when that row is
+    // absent). Guarded so applyRenameLabels cannot corrupt a merge loser.
+    if (renameFroms.has(fromNorm)) renameTargets.set(loserId, finalLabel)
   }
 
   const fingerprint = corrections.length
     ? sha256(canonicalJson(corrections.map((c) => ({ k: c.kind, p: c.payload }))))
     : ''
 
-  return { labelToFinal, loserToSurvivorLabel, fingerprint }
+  return { labelToFinal, loserToSurvivorLabel, renameTargets, fingerprint }
 }
 
 // Resolve each survivor LABEL to the actual current row that carries it, after the
