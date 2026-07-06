@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { requireAllowedUser } from '@/lib/auth/guard'
 import { listPeople } from '@/lib/people'
 import { PeopleList } from '@/components/people-list'
@@ -14,7 +15,12 @@ export default async function PeoplePage() {
   return (
     <main className="mp-page">
       <PageHeader back="/" backLabel="Home" />
-      <h1 className="mp-h1">People</h1>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
+        <h1 className="mp-h1">People</h1>
+        <Link href="/people/new" className="mp-btn mp-btn--ghost" style={{ padding: '6px 14px', fontSize: 14, flex: 'none' }}>
+          Add contact
+        </Link>
+      </div>
       <p className="mp-sub">
         {people.length} {people.length === 1 ? 'person' : 'people'} in your graph. Tap one to see what is
         tied to them, or to fix a name or merge duplicates.
