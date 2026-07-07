@@ -116,6 +116,7 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
   const known = new Set(claims.map((c) => c.id))
   const collected = await paginatedCollect({
     ctx: cfg.canonicalTable,
+    table: cfg.canonicalTable,
     system: cfg.system,
     heartbeat: cfg.heartbeat,
     itemsField: 'nodes',
@@ -275,6 +276,7 @@ async function runRelationshipsPass(
   const known = new Set(claims.map((c) => c.id))
   const collected = await paginatedCollect({
     ctx: table,
+    table,
     system: STAGE_C_RELATIONSHIPS_PROMPT,
     heartbeat,
     itemsField: 'edges',
@@ -395,6 +397,7 @@ async function runInsightsPass(
 
   const collected = await paginatedCollect({
     ctx: table,
+    table,
     system: STAGE_C_INSIGHTS_PROMPT,
     heartbeat,
     itemsField: 'insights',

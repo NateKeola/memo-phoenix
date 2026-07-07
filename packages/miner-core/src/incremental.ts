@@ -300,6 +300,7 @@ async function incNodePass(userId: string, cfg: IncNodeConfig): Promise<PassResu
   const known = new Set(claims.map((c) => c.id))
   const collected = await paginatedCollect({
     ctx: `${cfg.canonicalTable} (incremental)`,
+    table: cfg.canonicalTable,
     system: cfg.system,
     heartbeat: cfg.heartbeat,
     itemsField: 'nodes',
@@ -412,6 +413,7 @@ async function incRelationshipsPass(
   const known = new Set(claims.map((c) => c.id))
   const collected = await paginatedCollect({
     ctx: `${table} (incremental)`,
+    table,
     system: STAGE_C_RELATIONSHIPS_PROMPT,
     heartbeat,
     itemsField: 'edges',
@@ -498,7 +500,10 @@ export type IncrementalResult = { passes: PassResult[]; mode: IncrementalMode; n
 // whether a routine mine ran full or incremental.
 export async function runIncrementalDerivation(
   userId: string,
-  onStage?: (stage: string) => Promise<void>
+  onStage?: (stage: string) => Promise<void>,
+  // reports the decided mode BEFORE the passes run, so a run that fails mid-pass still
+  // records what it was attempting (full/incremental/noop).
+  onMode?: (mode: IncrementalMode) => Promise<void>
 ): Promise<IncrementalResult> {
   const stage = async (s: string) => {
     if (onStage) await onStage(s)
@@ -517,6 +522,7 @@ export async function runIncrementalDerivation(
 
   // --- FULL: baseline (first run on this graph) or a corrections change ---
   if (!baselineExists || correctionsChanged) {
+    if (onMode) await onMode('full')
     const passes = await runDerivation(userId, onStage)
     await markIncorporated(userId, captures)
     await setState(userId, CORR_FP_SCOPE, peopleRewrite.fingerprint)
@@ -537,6 +543,7 @@ export async function runIncrementalDerivation(
 
   // --- NO-OP: nothing new. Keep decay anchors / salience current (cheap), else idle.
   if (unincorporated.length === 0) {
+    if (onMode) await onMode('noop')
     await stage('freshness')
     const claimDates = await loadClaimDates(userId)
     const recon = await reconcileFreshness(userId, claimDates)
@@ -550,6 +557,7 @@ export async function runIncrementalDerivation(
   }
 
   // --- INCREMENTAL: fold in only the unincorporated captures ---
+  if (onMode) await onMode('incremental')
   const results: PassResult[] = []
 
   // EVERY resolution pass receives the EXISTING same-table canonical nodes as

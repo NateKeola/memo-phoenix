@@ -175,11 +175,15 @@ function LedgerLine({ run }: { run: LedgerRun }) {
     minute: '2-digit',
   })
   const trigger = TRIGGER_LABEL[run.trigger] ?? run.trigger
+  const mode = runModeLabel(run)
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', width: '100%' }}>
       <span style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
         <span style={{ fontSize: 16, color: 'var(--txt)' }}>{when}</span>
-        <span style={{ alignSelf: 'flex-start', fontSize: 11, letterSpacing: '0.06em', background: 'var(--surf-2)', color: 'var(--txt-faint)', padding: '4px 8px', borderRadius: 6 }}>{trigger}</span>
+        <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11, letterSpacing: '0.06em', background: 'var(--surf-2)', color: 'var(--txt-faint)', padding: '4px 8px', borderRadius: 6 }}>{trigger}</span>
+          {mode ? <span style={{ fontSize: 11, letterSpacing: '0.04em', background: 'var(--accent-soft)', color: 'var(--accent)', padding: '4px 8px', borderRadius: 6 }}>{mode}</span> : null}
+        </span>
       </span>
       <span style={{ textAlign: 'right', fontSize: 14, color: statusColor(run.status) }}>
         {run.status === 'running' ? `in progress${run.stage ? ` (${run.stage})` : ''}` : null}
@@ -201,4 +205,15 @@ function statusColor(s: string): string {
   if (s === 'done') return 'var(--ok)'
   if (s === 'error' || s === 'stalled') return 'var(--record-soft)'
   return 'var(--accent-deep)'
+}
+
+// The run's derivation path, so the operator can see whether routine mines run
+// incremental. On a done run it shows the counts; on a failed/attempted run it shows
+// the mode it was attempting (no bogus count). Null for pre-mode-recording runs.
+function runModeLabel(run: LedgerRun): string | null {
+  if (!run.mode) return null
+  const done = run.status === 'done'
+  if (run.mode === 'incremental') return done ? `incremental · ${run.newCaptures ?? 0} new` : 'incremental (attempted)'
+  if (run.mode === 'noop') return done ? 'no-op · up to date' : 'no-op'
+  return done ? `full · ${run.captures ?? 0} captures` : 'full (attempted)'
 }

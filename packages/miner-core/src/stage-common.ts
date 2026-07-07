@@ -164,6 +164,9 @@ function parseDiscrepancy(v: unknown): DiscrepancyItem | null {
 // provenance, so an occasional malformed response never dooms the run.
 export async function paginatedCollect(opts: {
   ctx: string
+  // the canonical table this pass emits, so verbose types (people/facts/insights)
+  // page smaller (pageLimit). Falls back to the global page size when absent.
+  table?: string
   system: string
   itemsField: 'nodes' | 'edges' | 'insights'
   labelOf: (item: Record<string, unknown>) => string | null
@@ -178,7 +181,7 @@ export async function paginatedCollect(opts: {
   const items: Array<Record<string, unknown>> = []
   const seen = new Set<string>()
   const already: string[] = []
-  const batchLimit = pageLimit()
+  const batchLimit = pageLimit(opts.table)
   let usage = emptyUsage()
   let discrepancies = 0
   const discrepancyItems: DiscrepancyItem[] = []
