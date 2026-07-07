@@ -25,7 +25,8 @@
     "prompts:generate": "node packages/miner-core/scripts/generate-prompts.mjs",
     "bible:generate": "node scripts/generate-bible.mjs",
     "miner": "tsx packages/miner-core/src/cli.ts",
-    "seed": "tsx packages/miner-core/src/seed.ts"
+    "seed": "tsx packages/miner-core/src/seed.ts",
+    "check:pages": "tsx scripts/check-page-limit.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",
