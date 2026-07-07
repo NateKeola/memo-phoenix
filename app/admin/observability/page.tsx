@@ -164,15 +164,16 @@ function runColor(s: string): string {
   return 'var(--accent-deep)'
 }
 // The derivation path this run took (from miner_runs.summary), so the operator can
-// confirm routine mines are incremental. Null for pre-Phase-2 runs (no mode field)
-// and for runs that never reached 'done' (no summary yet), which render without a
-// chip rather than a wrong one.
+// confirm routine mines are incremental. Null for pre-Phase-2 runs (no mode field).
+// A DONE run shows its counts; a failed/attempted run (mineWithLock stamps the mode
+// early, before the passes) shows the mode it was attempting WITHOUT a bogus 0 count.
 function runMode(r: Record<string, unknown>): string | null {
   const s = r.summary as { mode?: string; newCaptures?: number; captures?: number } | null | undefined
   if (!s || typeof s.mode !== 'string') return null
-  if (s.mode === 'incremental') return `incremental · ${s.newCaptures ?? 0} new`
-  if (s.mode === 'noop') return 'no-op · up to date'
-  return `full · ${s.captures ?? 0} captures`
+  const done = String(r.status) === 'done'
+  if (s.mode === 'incremental') return done ? `incremental · ${s.newCaptures ?? 0} new` : 'incremental (attempted)'
+  if (s.mode === 'noop') return done ? 'no-op · up to date' : 'no-op'
+  return done ? `full · ${s.captures ?? 0} captures` : 'full (attempted)'
 }
 // Show a stalled run (running but no heartbeat for > 10 min) honestly.
 function effectiveRunStatus(r: Record<string, unknown>): string {

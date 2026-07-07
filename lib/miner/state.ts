@@ -31,6 +31,11 @@ type MineSummaryShape = {
   extracted?: number
   rawInserted?: number
   durationMs?: number
+  // the derivation path (full/incremental/noop) and how many captures were folded,
+  // so the Memory-screen ledger can show the run mode (mirrors the observability chip).
+  // A failed run carries only { mode } (stamped early by mineWithLock).
+  mode?: string
+  newCaptures?: number
   passes?: Array<{ inserted?: number; updated?: number; unchanged?: number; skipped?: boolean }>
 }
 
@@ -50,6 +55,9 @@ export type LedgerRun = {
   changes: RunChanges | null
   captures: number | null
   extracted: number | null
+  // 'full' | 'incremental' | 'noop' | null (null for pre-mode-recording runs)
+  mode: string | null
+  newCaptures: number | null
 }
 
 export type MinerState = {
@@ -100,6 +108,8 @@ function toLedgerRow(r: Record<string, unknown>, nowMs: number): LedgerRun {
     changes: summarizeChanges(summary),
     captures: typeof summary?.captures === 'number' ? summary.captures : null,
     extracted: typeof summary?.extracted === 'number' ? summary.extracted : null,
+    mode: typeof summary?.mode === 'string' ? summary.mode : null,
+    newCaptures: typeof summary?.newCaptures === 'number' ? summary.newCaptures : null,
   }
 }
 

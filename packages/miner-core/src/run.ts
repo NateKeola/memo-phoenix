@@ -45,10 +45,17 @@ export function assertUserId(userId: string, where: string): void {
 // the caller (a heartbeat must never kill a run).
 export type StageReporter = (stage: string) => Promise<void>
 
+// Reports the derivation path (full/incremental/noop) as soon as it is decided, so
+// mineWithLock can stamp it onto the miner_runs row BEFORE the passes run. That way a
+// run that fails mid-derivation (e.g. the people pass) still carries its mode, and the
+// observability + Memory chips can say what it was attempting, not just "error".
+export type ModeReporter = (mode: IncrementalMode) => Promise<void>
+
 export async function mine(
   userId: string,
   startedAtMs: number,
-  onStage?: StageReporter
+  onStage?: StageReporter,
+  onMode?: ModeReporter
 ): Promise<MineSummary> {
   assertUserId(userId, 'mine')
   const stage = async (s: string) => {
@@ -85,14 +92,18 @@ export async function mine(
   let mode: IncrementalMode
   let newCaptures: number
   if (INCREMENTAL) {
-    const r = await runIncrementalDerivation(userId, onStage)
+    // runIncrementalDerivation decides + reports the mode (via onMode) before running
+    // its passes, so it is stamped even if a pass fails.
+    const r = await runIncrementalDerivation(userId, onStage, onMode)
     passes = r.passes
     mode = r.mode
     newCaptures = r.newCaptures
   } else {
-    passes = await runDerivation(userId, onStage)
+    // non-incremental is always a full recompute; report the mode BEFORE the passes.
     mode = 'full'
     newCaptures = captures.length
+    if (onMode) await onMode('full')
+    passes = await runDerivation(userId, onStage)
   }
   await stage('finishing')
 
@@ -241,9 +252,21 @@ export async function mineWithLock(
   }
   await beat('starting')
 
+  // Stamp the run mode onto the row as soon as mine() decides it (before the passes),
+  // so a run that fails mid-derivation still records what it was attempting. The 'done'
+  // branch below overwrites summary with the full MineSummary; a failed run keeps this
+  // partial {mode}. Best-effort, like the heartbeat.
+  const stampMode: ModeReporter = async (m) => {
+    try {
+      await db.from('miner_runs').update({ summary: { mode: m } }).eq('user_id', userId).eq('id', runId).eq('status', 'running')
+    } catch (e) {
+      console.warn('[miner] mode stamp failed (continuing):', e instanceof Error ? e.message : e)
+    }
+  }
+
   const started = Date.now()
   try {
-    const summary = await mine(userId, started, beat)
+    const summary = await mine(userId, started, beat, stampMode)
     summary.durationMs = Date.now() - started
     await db
       .from('miner_runs')
