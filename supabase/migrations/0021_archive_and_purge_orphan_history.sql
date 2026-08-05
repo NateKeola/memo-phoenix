@@ -85,29 +85,53 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- 3. Only now: disable the append-only trigger, purge, re-enable.
--- ---------------------------------------------------------------------------
-alter table public.canonical_history disable trigger canonical_history_append_only;
-
-delete from public.canonical_history ch
-where not exists (select 1 from auth.users u where u.id = ch.user_id);
-
-alter table public.canonical_history enable trigger canonical_history_append_only;
-
--- ---------------------------------------------------------------------------
--- 4. Post-purge assertions. Any failure rolls back the delete AND the trigger
---    disable, so the table cannot be left unprotected.
+-- 3. Purge, with RELATIVE assertions computed in the same transaction.
+--
+--    The row count is deliberately NOT hardcoded. Between the Step 0b baseline and
+--    this migration reaching production, the pre-merge proof runs `npm run security`
+--    twice, and each run still writes canonical_history rows (the trigger fires on
+--    insert AND delete for every seeded canonical row). Those new rows are owned by
+--    the permanent guard accounts, so they are NOT orphans and must survive, but
+--    they do move the total. An absolute expectation would be stale on arrival.
+--
+--    So: capture the pre-purge count, then assert post = pre - archived. That holds
+--    no matter how many legitimate rows arrived in between, and it still proves the
+--    purge removed exactly the archived set and nothing else.
+--
+--    The archive assertion above stays hardcoded at 578 on purpose. It is a
+--    tripwire: the guard fix stops new orphans, so 578 should still be exactly
+--    right, and if it is not, something unexpected happened and the migration must
+--    stop rather than proceed.
+--
+--    Disable, delete, re-enable and assert all live in one DO block so the
+--    pre-purge count is in scope for the post-purge comparison. Any raise below
+--    rolls back the delete AND the trigger disable together, so canonical_history
+--    can never be left unprotected.
 -- ---------------------------------------------------------------------------
 do $$
 declare
-  remaining     int;
+  pre_count     int;
+  archived      int;
+  post_count    int;
   orphans_left  int;
   trg_state     char;
-  expected_rows constant int := 3838;
 begin
-  select count(*) into remaining from public.canonical_history;
-  if remaining <> expected_rows then
-    raise exception 'ROWCOUNT ASSERTION FAILED: canonical_history has % rows, expected %.', remaining, expected_rows;
+  select count(*) into pre_count from public.canonical_history;
+  select count(*) into archived
+  from audit_backup.canonical_history_orphan_archive
+  where reason = 'phase-1-precondition: user_id absent from auth.users';
+
+  alter table public.canonical_history disable trigger canonical_history_append_only;
+
+  delete from public.canonical_history ch
+  where not exists (select 1 from auth.users u where u.id = ch.user_id);
+
+  alter table public.canonical_history enable trigger canonical_history_append_only;
+
+  select count(*) into post_count from public.canonical_history;
+  if post_count <> pre_count - archived then
+    raise exception 'ROWCOUNT ASSERTION FAILED: canonical_history went % -> %, but % rows were archived. Expected % after the purge. The delete removed a different set than the archive captured.',
+      pre_count, post_count, archived, pre_count - archived;
   end if;
 
   select count(*) into orphans_left
@@ -135,7 +159,8 @@ begin
     raise exception 'TRIGGER ASSERTION FAILED: canonical_history_append_only is still DISABLED. canonical_history would no longer be append-only.';
   end if;
 
-  raise notice 'purge ok: % rows remain, 0 orphans, append-only trigger enabled (tgenabled=%)', remaining, trg_state;
+  raise notice 'purge ok: canonical_history % -> % (% archived), 0 orphans, append-only trigger enabled (tgenabled=%)',
+    pre_count, post_count, archived, trg_state;
 end $$;
 
 -- ---------------------------------------------------------------------------
