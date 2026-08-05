@@ -26,7 +26,9 @@
     "bible:generate": "node scripts/generate-bible.mjs",
     "miner": "tsx packages/miner-core/src/cli.ts",
     "seed": "tsx packages/miner-core/src/seed.ts",
-    "check:pages": "tsx scripts/check-page-limit.ts"
+    "check:pages": "tsx scripts/check-page-limit.ts",
+    "seed:guards": "node scripts/seed-guard-accounts.mjs",
+    "check:orphans": "tsx scripts/check-orphans.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",
