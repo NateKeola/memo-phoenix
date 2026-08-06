@@ -86,6 +86,12 @@ function check(name: string, cond: boolean, detail = ''): void {
 type TableRow = { table_schema: string; table_name: string }
 type CountRow = { n: number | string }
 
+// The ONLY tables where a null user_id is legitimate rather than a defect. Keep this
+// set as small as the schema demands: a table earns a place here only by declaring
+// user_id NULLABLE for a documented reason. observability_events does (migration
+// 0018: cron and system events have no user). Nothing else does.
+const NULL_USER_IS_VALID = new Set(['observability_events'])
+
 async function main(): Promise<void> {
   console.log(`project ${REF}: orphan scan\n`)
 
@@ -119,13 +125,29 @@ async function main(): Promise<void> {
 
   let totalOrphans = 0
   for (const t of tables) {
+    // NULL HANDLING IS PER TABLE, ON PURPOSE. Do not collapse this back into a
+    // blanket `user_id is not null` across every table.
+    //
+    // observability_events is the ONE table whose user_id is NULLABLE by design:
+    // cron and other system events legitimately have no user (migration 0018). A
+    // null there is correct and is NOT an orphan, so it is excluded on this table
+    // only.
+    //
+    // Every other table declares user_id NOT NULL, so a null is impossible today
+    // and would mean someone dropped the constraint. That is a real defect and it
+    // must surface as a failure here, not be silently skipped. A blanket exemption
+    // would hide exactly that.
+    const nullIsValid = NULL_USER_IS_VALID.has(t.table_name)
+    const nullClause = nullIsValid ? 'x.user_id is not null and ' : ''
     const rows = await sql<CountRow>(`
       select count(*) as n from public.${t.table_name} x
-      where x.user_id is not null
-        and not exists (select 1 from auth.users u where u.id = x.user_id);`)
+      where ${nullClause}not exists (select 1 from auth.users u where u.id = x.user_id);`)
     const n = Number(rows[0]?.n ?? 0)
     totalOrphans += n
-    check(`${t.table_name} has 0 orphan rows`, n === 0, `found ${n}`)
+    const label = nullIsValid
+      ? `${t.table_name} has 0 orphan rows (null user_id exempt by design)`
+      : `${t.table_name} has 0 orphan rows`
+    check(label, n === 0, `found ${n}`)
   }
 
   console.log(`\n${pass} passed, ${fail} failed, ${totalOrphans} orphan rows total`)

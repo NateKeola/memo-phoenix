@@ -3,9 +3,9 @@
 -- ============================================================================
 -- DESTRUCTIVE MIGRATION ON A HARD APPEND-ONLY TABLE.
 -- Requires the human destructive-migration label before merge.
--- It temporarily disables canonical_history_append_only, deletes 578 rows, and
--- re-enables the trigger, all in one transaction with assertions that roll the
--- whole thing back on any mismatch.
+-- It temporarily disables canonical_history_append_only, deletes the orphan rows,
+-- and re-enables the trigger, with assertions that roll all of it back on any
+-- mismatch.
 -- ============================================================================
 --
 -- WHY THIS EXISTS
@@ -14,9 +14,9 @@
 -- canonical_* rows for throwaway auth users and then DELETED those auth users at
 -- teardown. Seeding a canonical row fires snapshot_canonical(), which writes a
 -- canonical_history row. canonical_history is hard append-only (forbid_mutation), so
--- teardown could never remove those rows, and once the auth user was gone no RLS
--- policy could ever reach them again: the predicate is user_id = auth.uid() and a
--- deleted user cannot authenticate.
+-- teardown could never remove it, and once the auth user was gone no RLS policy
+-- could reach it: the predicate is user_id = auth.uid() and a deleted user cannot
+-- authenticate.
 --
 -- 578 such rows across 97 vanished users accumulated. They block the Phase 1 scope
 -- backfill, which sets scope_id NOT NULL by joining user_id to that user's personal
@@ -26,11 +26,18 @@
 -- The guard fix ships in this same PR and lands FIRST in the change order, so no new
 -- orphans can be created. This migration clears the accumulated ones.
 --
--- TRANSACTION SEMANTICS
--- The whole file is submitted as one multi-statement query and therefore runs in a
--- single implicit transaction (this repo's existing migrations rely on the same
--- property; none use explicit begin/commit). Any `raise exception` below rolls back
--- every statement in this file, including the trigger disable.
+-- ATOMICITY, STATED PRECISELY
+-- Section 2 below is a SINGLE plpgsql DO block containing the archive, the trigger
+-- disable, the delete, the trigger re-enable and every assertion. A plpgsql block is
+-- atomic in itself: any `raise exception` inside it rolls back everything the block
+-- did, including the trigger disable. So the safety of this migration does NOT
+-- depend on how the applier wraps the file.
+--
+-- For the record, neither applier splits on semicolons (both verified by reading the
+-- code): the GitHub Action runs `supabase db push`, which applies each migration file
+-- as a unit, and `scripts/db.mjs` sends the whole file plus its bookkeeping insert as
+-- one query payload. The section 1 DDL is independently idempotent, so a re-run is
+-- safe either way.
 --
 -- ARCHIVE, NOT DELETE
 -- Nothing is destroyed without a copy. Every purged row is written to
@@ -38,7 +45,7 @@
 -- asserted before a single row is removed.
 
 -- ---------------------------------------------------------------------------
--- 1. The archive schema, locked down.
+-- 1. The archive schema, locked down. Every statement here is idempotent.
 --    audit_backup is the standing destination for archived or unreachable data.
 --    It is NOT in public, so PostgREST does not expose it and the RLS sweep
 --    (check-rls.mjs, which enumerates schemaname = 'public') never sees it.
@@ -60,66 +67,72 @@ create table if not exists audit_backup.canonical_history_orphan_archive (
 revoke all on audit_backup.canonical_history_orphan_archive from anon, authenticated;
 
 -- ---------------------------------------------------------------------------
--- 2. Archive every orphan row, then assert the archive is complete.
---    An orphan is a canonical_history row whose user_id has no auth.users match.
---    canonical_history.user_id is NOT NULL, so there is no null case to handle.
--- ---------------------------------------------------------------------------
-insert into audit_backup.canonical_history_orphan_archive (row, reason)
-select to_jsonb(ch), 'phase-1-precondition: user_id absent from auth.users'
-from public.canonical_history ch
-where not exists (select 1 from auth.users u where u.id = ch.user_id);
-
-do $$
-declare
-  archived  int;
-  expected  constant int := 578;
-begin
-  select count(*) into archived
-  from audit_backup.canonical_history_orphan_archive
-  where reason = 'phase-1-precondition: user_id absent from auth.users';
-
-  if archived <> expected then
-    raise exception 'ARCHIVE ASSERTION FAILED: archived % rows, expected %. Nothing has been deleted. The orphan count drifted since the Step 0b baseline (most likely npm run security was run under the OLD guard code). Re-baseline the counts, do not loosen this assertion.', archived, expected;
-  end if;
-  raise notice 'archive ok: % orphan rows preserved', archived;
-end $$;
-
--- ---------------------------------------------------------------------------
--- 3. Purge, with RELATIVE assertions computed in the same transaction.
+-- 2. Archive, then purge. One atomic block.
 --
---    The row count is deliberately NOT hardcoded. Between the Step 0b baseline and
---    this migration reaching production, the pre-merge proof runs `npm run security`
---    twice, and each run still writes canonical_history rows (the trigger fires on
---    insert AND delete for every seeded canonical row). Those new rows are owned by
---    the permanent guard accounts, so they are NOT orphans and must survive, but
---    they do move the total. An absolute expectation would be stale on arrival.
+--    IDEMPOTENCY. The guard at the top fires ONLY in the exact "already applied"
+--    state: zero orphans remain AND the archive holds exactly 578 rows. In that
+--    case the block reports success and returns, so re-running a migration that
+--    already succeeded prints a notice rather than a red assertion failure. The
+--    condition is deliberately narrow. If ANY orphan exists the migration runs, and
+--    every other state (orphans present with a full archive, or no orphans with an
+--    empty archive) falls through to the assertions and stops loudly.
 --
---    So: capture the pre-purge count, then assert post = pre - archived. That holds
---    no matter how many legitimate rows arrived in between, and it still proves the
---    purge removed exactly the archived set and nothing else.
+--    ROW COUNTS. The post-purge total is asserted RELATIVELY (post = pre - archived),
+--    computed inside this block. It is deliberately not a hardcoded number: between
+--    the Step 0b baseline and this migration reaching production, the pre-merge proof
+--    runs `npm run security` twice, and each run still writes canonical_history rows
+--    (the trigger is `after insert or update or delete` on every canonical table, so
+--    a seeded row writes one going in and one at teardown). Those rows are owned by
+--    the permanent guard accounts, so they are NOT orphans and must survive, but they
+--    move the total. An absolute expectation would be stale on arrival.
 --
---    The archive assertion above stays hardcoded at 578 on purpose. It is a
---    tripwire: the guard fix stops new orphans, so 578 should still be exactly
---    right, and if it is not, something unexpected happened and the migration must
---    stop rather than proceed.
---
---    Disable, delete, re-enable and assert all live in one DO block so the
---    pre-purge count is in scope for the post-purge comparison. Any raise below
---    rolls back the delete AND the trigger disable together, so canonical_history
---    can never be left unprotected.
+--    The archive assertion stays hardcoded at 578 on purpose. It is a tripwire: the
+--    guard fix stops new orphans, so 578 should still be exactly right, and if it is
+--    not, something unexpected happened and the migration must stop.
 -- ---------------------------------------------------------------------------
 do $$
 declare
-  pre_count     int;
+  reason_tag    constant text := 'phase-1-precondition: user_id absent from auth.users';
+  expected      constant int := 578;
+  orphans_now   int;
   archived      int;
+  pre_count     int;
   post_count    int;
   orphans_left  int;
   trg_state     char;
 begin
-  select count(*) into pre_count from public.canonical_history;
+  -- --- idempotency guard: exactly the "already applied" state, nothing wider ---
+  select count(*) into orphans_now
+  from public.canonical_history ch
+  where not exists (select 1 from auth.users u where u.id = ch.user_id);
+
   select count(*) into archived
   from audit_backup.canonical_history_orphan_archive
-  where reason = 'phase-1-precondition: user_id absent from auth.users';
+  where reason = reason_tag;
+
+  if orphans_now = 0 and archived = expected then
+    raise notice '0021 is ALREADY APPLIED. % orphan rows remain and the archive holds exactly %. Nothing to do. THIS IS SUCCESS, not a failure, and no data was touched.', orphans_now, archived;
+    return;
+  end if;
+
+  -- --- archive every orphan row, then assert the archive is complete ---
+  -- canonical_history.user_id is NOT NULL, so there is no null case to handle here.
+  insert into audit_backup.canonical_history_orphan_archive (row, reason)
+  select to_jsonb(ch), reason_tag
+  from public.canonical_history ch
+  where not exists (select 1 from auth.users u where u.id = ch.user_id);
+
+  select count(*) into archived
+  from audit_backup.canonical_history_orphan_archive
+  where reason = reason_tag;
+
+  if archived <> expected then
+    raise exception 'ARCHIVE ASSERTION FAILED: archive holds % rows, expected %. NOTHING HAS BEEN DELETED. The orphan count drifted since the Step 0b baseline (most likely the security harness ran under the OLD guard code). Re-baseline the counts, do not loosen this assertion.', archived, expected;
+  end if;
+  raise notice 'archive ok: % orphan rows preserved', archived;
+
+  -- --- only now: disable the append-only trigger, purge, re-enable ---
+  select count(*) into pre_count from public.canonical_history;
 
   alter table public.canonical_history disable trigger canonical_history_append_only;
 
@@ -128,9 +141,10 @@ begin
 
   alter table public.canonical_history enable trigger canonical_history_append_only;
 
+  -- --- post-purge assertions; any failure rolls back the delete AND the disable ---
   select count(*) into post_count from public.canonical_history;
   if post_count <> pre_count - archived then
-    raise exception 'ROWCOUNT ASSERTION FAILED: canonical_history went % -> %, but % rows were archived. Expected % after the purge. The delete removed a different set than the archive captured.',
+    raise exception 'ROWCOUNT ASSERTION FAILED: canonical_history went % -> %, but % rows were archived, so % was expected. The delete removed a different set than the archive captured.',
       pre_count, post_count, archived, pre_count - archived;
   end if;
 
@@ -164,7 +178,8 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- 5. Assert the archive is not reachable by any client role.
+-- 3. Assert the archive is not reachable by any client role. Runs in both the
+--    fresh-apply and already-applied cases, so the lockdown is re-verified.
 --
 --    The PostgREST exposed-schemas setting lives in Supabase project config, not
 --    in the database, so it is generally NOT readable from a migration session
