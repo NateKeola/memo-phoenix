@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "Permanent security-guard accounts. Created ONCE by scripts/seed-guard-accounts.mjs",
+    "and NEVER deleted. See the standing rule in CLAUDE.md: deleting an auth.users row",
+    "strands canonical_history rows that no RLS policy can ever reach, because the",
+    "predicate is user_id = auth.uid() and no such user can authenticate.",
+    "",
+    "These are throwaway credentials for RLS-isolated accounts on the reserved .invalid",
+    "TLD. They hold only marked test rows, public signups are disabled, and every table",
+    "they touch is per-user isolated (that is precisely what the guards prove). Committing",
+    "them matches the pre-existing practice these scripts already used.",
+    "",
+    "Consumers: scripts/check-multiuser.mjs, scripts/check-miner-isolation.ts.",
+    "Read via readFileSync + JSON.parse so both the .mjs and .ts guards share one source",
+    "of truth with no module-resolution or typecheck risk."
+  ],
+  "a": {
+    "email": "memo-guard-a@test.invalid",
+    "password": "MemoGuard-A-pw-9f3a2b1c"
+  },
+  "b": {
+    "email": "memo-guard-b@test.invalid",
+    "password": "MemoGuard-B-pw-7d8e4c2a"
+  }
+}

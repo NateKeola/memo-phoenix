@@ -79,14 +79,23 @@ const check = (name: string, cond: boolean, detail = '') => {
 const MARK = 'MINERISO'
 const SHARED = `${MARK} Sharedname` // an identical label for BOTH users (cross-user collision probe)
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')
-const EMAIL_A = 'miner-iso-a@securitytest.local'
-const EMAIL_B = 'miner-iso-b@securitytest.local'
-const PASS = 'MinerIso-pw-3a91c7f2'
+// PERMANENT guard accounts, shared with check-multiuser.mjs. Single source of truth
+// in scripts/guard-accounts.json. This guard NEVER creates or deletes an auth user:
+// it used to, and because it seeds canonical_* rows (which fire snapshot_canonical
+// into the hard append-only canonical_history), every deletion stranded history rows
+// that no RLS policy can ever reach. See the standing rule in CLAUDE.md.
+// Requires: npm run seed:guards (idempotent).
+const ACCOUNTS = JSON.parse(readFileSync(join(ROOT, 'scripts', 'guard-accounts.json'), 'utf8')) as {
+  a: { email: string; password: string }
+  b: { email: string; password: string }
+}
+const EMAIL_A = ACCOUNTS.a.email
+const EMAIL_B = ACCOUNTS.b.email
 
 type Seeded = { sharedPersonId: string; uniquePersonId: string; factId: string }
 
 async function findUser(email: string): Promise<string | null> {
-  for (let page = 1; page <= 5; page++) {
+  for (let page = 1; page <= 10; page++) {
     const r = await adminAuth('GET', `admin/users?page=${page}&per_page=200`)
     const users = ((r.data as { users?: Array<{ id: string; email: string }> })?.users) ?? []
     const u = users.find((x) => x.email === email)
@@ -94,10 +103,6 @@ async function findUser(email: string): Promise<string | null> {
     if (users.length < 200) break
   }
   return null
-}
-async function deleteUser(email: string): Promise<void> {
-  const id = await findUser(email)
-  if (id) await adminAuth('DELETE', `admin/users/${id}`)
 }
 
 async function seed(uid: string, who: string): Promise<Seeded> {
@@ -130,18 +135,26 @@ const mentions = (rs: Array<Record<string, unknown>>, who: string) => rs.some((x
 
 async function main() {
   console.log('host:', HOST)
-  await deleteTestRows()
-  await deleteUser(EMAIL_A)
-  await deleteUser(EMAIL_B)
 
-  const ca = await adminAuth('POST', 'admin/users', { email: EMAIL_A, password: PASS, email_confirm: true })
-  const cb = await adminAuth('POST', 'admin/users', { email: EMAIL_B, password: PASS, email_confirm: true })
-  const A = (ca.data as { id?: string })?.id
-  const B = (cb.data as { id?: string })?.id
-  check('created test user A', !!A)
-  check('created test user B', !!B)
-  if (!A || !B) return
+  const A = await findUser(EMAIL_A)
+  const B = await findUser(EMAIL_B)
+  check('permanent guard user A resolved', !!A, `${EMAIL_A} missing: run npm run seed:guards`)
+  check('permanent guard user B resolved', !!B, `${EMAIL_B} missing: run npm run seed:guards`)
+  if (!A || !B) { console.log('cannot proceed without both guard accounts. Run: npm run seed:guards'); return }
   console.log('  A =', A, '\n  B =', B)
+
+  // Clear any prior run's rows, then assert the accounts really start clean. The
+  // previous version called deleteTestRows() with no arguments, which was a silent
+  // no-op (its loop body only ran when uids were supplied), so nothing was cleaned.
+  // With permanent accounts "these users own nothing yet" must be proven, not assumed.
+  await deleteTestRows([A, B])
+  for (const [label, uid] of [['A', A], ['B', B]] as const) {
+    let residue = 0
+    for (const table of SEEDED_TABLES) {
+      residue += (await rows(`${table}?user_id=eq.${uid}&select=user_id`)).length
+    }
+    check(`guard account ${label} starts clean (owns 0 seeded rows)`, residue === 0, `found ${residue}`)
+  }
 
   const sa = await seed(A, 'A')
   const sb = await seed(B, 'B')
@@ -237,22 +250,33 @@ async function main() {
   process.exit(fail === 0 ? 0 : 1)
 }
 
+// Every mutable table this guard seeds. Used for cleanup and for the start-of-run
+// and end-of-run "owns nothing" assertions.
+const SEEDED_TABLES = ['canonical_people', 'canonical_facts', 'entity_aliases', 'miner_state', 'miner_runs']
+
 async function deleteTestRows(uids: string[] = []) {
-  // delete only the mutable rows we insert; never touch append-only ground truth
-  for (const table of ['canonical_people', 'canonical_facts', 'entity_aliases', 'miner_state', 'miner_runs']) {
-    if (uids.length) for (const u of uids) await svc('DELETE', `${table}?user_id=eq.${u}`)
-    // also clean any prior run's rows by marker where possible (summary/scope)
+  // delete only the mutable rows we insert; never touch append-only ground truth.
+  // canonical_history rows written by the snapshot trigger are append-only and stay:
+  // safe because the guard accounts are permanent, so they are never orphaned.
+  for (const table of SEEDED_TABLES) {
+    for (const u of uids) await svc('DELETE', `${table}?user_id=eq.${u}`)
   }
 }
 
 async function teardown(A: string, B: string) {
-  console.log('\n== teardown (delete seeded rows + users; verify no residue) ==')
+  // The accounts are PERMANENT and are deliberately not deleted. Deleting them is
+  // what stranded 578 canonical_history rows. See the standing rule in CLAUDE.md.
+  console.log('\n== teardown (delete seeded rows; keep the permanent guard accounts) ==')
   await deleteTestRows([A, B])
   const leftover = await rows(`canonical_people?user_id=in.(${A},${B})&select=id`)
   check('no canonical residue for the test users', leftover.length === 0, `got ${leftover.length}`)
-  await deleteUser(EMAIL_A)
-  await deleteUser(EMAIL_B)
-  check('deleted test users', (await findUser(EMAIL_A)) === null && (await findUser(EMAIL_B)) === null)
+  // Replaces the old "deleted test users" assertion with a strictly stronger one:
+  // prove every seeded row is gone rather than proving the accounts vanished.
+  let residue = 0
+  for (const table of SEEDED_TABLES) {
+    residue += (await rows(`${table}?user_id=in.(${A},${B})&select=user_id`)).length
+  }
+  check('teardown removed all seeded guard rows', residue === 0, `left ${residue}`)
 }
 
 main().catch((e) => { console.error('ERROR', e); process.exit(1) })
