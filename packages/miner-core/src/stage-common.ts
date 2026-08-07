@@ -9,6 +9,7 @@ import {
   type LlmCallPhase,
 } from './call-telemetry'
 import { admin } from './supabase'
+import { translateClaimHandles, type ClaimHandles } from './handles'
 import { canonicalJson, sha256 } from './identity'
 import { addUsage, emptyUsage, type DiscrepancyItem, type ModelNode, type Usage } from './types'
 
@@ -186,6 +187,12 @@ export async function paginatedCollect(opts: {
   labelOf: (item: Record<string, unknown>) => string | null
   // build the user message given what was already emitted + the batch cap
   buildUser: (alreadyEmitted: string[], batchLimit: number) => string
+  // Short claim handles substituted for raw uuids in the payload (see handles.ts).
+  // Issued ONCE per pass by the caller, so every batch and every retry attempt
+  // renders identical text. When present, the parsed response is translated back
+  // to real uuids immediately below, BEFORE validate runs, so validateCited and
+  // everything downstream keep seeing real uuids. Absent: no substitution.
+  handles?: ClaimHandles
   // batchNo lets a validator name the failing item by POSITION rather than by its
   // model-authored label, since the thrown Error is persisted to miner_runs.error.
   validate?: (batchItems: Array<Record<string, unknown>>, batchNo: number) => void
@@ -245,10 +252,17 @@ export async function paginatedCollect(opts: {
       let phase: LlmCallPhase = 'parse'
       try {
         const parsed = parseModelObject(res.raw, `${opts.ctx} batch ${i + 1}`, res.meta)
+        // Handles -> real claim uuids, BEFORE validate. Classified as a validate-phase
+        // failure because an unissued handle is a provenance error, not bad JSON, so it
+        // gets the same 'unknown_claim_id' error class an unknown uuid gets today. It
+        // sits inside this try, so it is reported and retried by the identical path.
+        phase = 'validate'
+        if (opts.handles) {
+          translateClaimHandles(parsed, opts.handles, opts.itemsField, `${opts.ctx} batch ${i + 1}`)
+        }
         const batch = Array.isArray(parsed[opts.itemsField])
           ? (parsed[opts.itemsField] as Array<Record<string, unknown>>)
           : []
-        phase = 'validate'
         if (opts.validate) opts.validate(batch, i + 1)
         out = parsed
         await reportLlmCall(opts.userId, {

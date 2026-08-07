@@ -89,9 +89,16 @@ export function classifyLlmError(phase: LlmCallPhase, err: unknown): LlmErrorCla
 // The rejected id from a provenance failure. A uuid IS an id, which is shaped and
 // allowed, and it is the single most useful field for recognizing a transcription
 // splice (2026-08-07: the head came from the right claim, the tail from another).
+// Matches BOTH forms: the raw uuid (still what the insights `known` set and any
+// unhandled pass reject on) and the 4-character claim handle (handles.ts). Without
+// the second alternative this would return null for the most common failure once
+// the payload carries handles, silently degrading the PR #48 instrumentation. The
+// lookahead stops a longer malformed token matching on its first four characters.
 export function rejectedClaimId(err: unknown): string | null {
   const m = err instanceof Error ? err.message : String(err)
-  const hit = m.match(/cited unknown raw id ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)
+  const hit = m.match(
+    /cited unknown raw id ((?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})|(?:[a-z0-9]{4}))(?![\w-])/i
+  )
   return hit ? hit[1] : null
 }
 

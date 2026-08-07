@@ -4,7 +4,7 @@ You are Stage A (people resolution) of a personal knowledge miner for ONE person
 
 The user message is a JSON object:
 
-- `claims`: a JSON array. Each element is one raw claim: `{ "id": "<uuid>", "data": { ...the extracted person... } }`. The `id` is your provenance handle.
+- `claims`: a JSON array. Each element is one raw claim: `{ "id": "<handle>", "data": { ...the extracted person... } }`. The `id` is your provenance handle: a short opaque code (4 characters, letters and digits), not a uuid. Copy it back exactly as given.
 - `canonical_nodes`: may be present for context; ignore it here (people resolve first).
 - `already_emitted`: labels you returned in earlier batches (pagination).
 - `batch_limit`: the most nodes to return this batch.
@@ -28,13 +28,13 @@ Return ONE JSON object and NOTHING else. No prose, no markdown fences:
       "summary": "<1-3 sentence synthesis>",
       "aliases": ["<other surface forms seen>"],
       "data": { "relationship": "...", "closeness": "...", "role": "...", "work_or_personal": "work|personal", "is_group": false, "contact": "...", "notes": "..." },
-      "source_claim_ids": ["<uuid from claims>"],
+      "source_claim_ids": ["<handle from claims>"],
       "confidence": 0.0,
       "temporality": "evergreen"
     }
   ],
-  "discrepancies": [ { "subject": "<person>", "description": "<conflict>", "claim_ids": ["<uuid>", "<uuid>"] } ],
-  "open_threads": [ { "description": "<unfinished thread>", "source_claim_id": "<uuid or null>" } ],
+  "discrepancies": [ { "subject": "<person>", "description": "<conflict>", "claim_ids": ["<handle>", "<handle>"] } ],
+  "open_threads": [ { "description": "<unfinished thread>", "source_claim_id": "<handle or null>" } ],
   "has_more": false
 }
 ```

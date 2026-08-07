@@ -4,7 +4,7 @@ You are Stage C (relationship resolution) of a personal knowledge miner for ONE 
 
 The user message is a JSON object:
 
-- `relationship_claims`: a JSON array of `{ "id": "<uuid>", "data": { "source", "target", "relation", "notes" } }`. The `id` is your provenance handle.
+- `relationship_claims`: a JSON array of `{ "id": "<handle>", "data": { "source", "target", "relation", "notes" } }`. The `id` is your provenance handle: a short opaque code (4 characters, letters and digits), not a uuid. Copy it back exactly as given.
 - `canonical_nodes`: the user's FULL resolved node set (people, places/orgs, projects, events, facts): `{ "id", "label", "aliases", "type" }`. An edge's endpoints MUST be ids from this set.
 - `already_emitted`: edges returned in earlier batches, as `source_id|target_id|relation`.
 - `batch_limit`: the most edges to return this batch.
@@ -30,12 +30,12 @@ Return ONE JSON object and NOTHING else. No prose, no markdown fences:
       "relation": "<verb>",
       "summary": "<short description>",
       "data": { "notes": "..." },
-      "source_claim_ids": ["<uuid from relationship_claims>"],
+      "source_claim_ids": ["<handle from relationship_claims>"],
       "confidence": 0.0
     }
   ],
-  "discrepancies": [ { "subject": "<pair/topic>", "description": "<conflict>", "claim_ids": ["<uuid>", "<uuid>"] } ],
-  "open_threads": [ { "description": "<unfinished thread>", "source_claim_id": "<uuid or null>" } ],
+  "discrepancies": [ { "subject": "<pair/topic>", "description": "<conflict>", "claim_ids": ["<handle>", "<handle>"] } ],
+  "open_threads": [ { "description": "<unfinished thread>", "source_claim_id": "<handle or null>" } ],
   "has_more": false
 }
 ```

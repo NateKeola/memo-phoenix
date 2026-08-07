@@ -10,6 +10,7 @@ import {
   supersedeLosers,
   type PeopleRewrite,
 } from './corrections'
+import { issueHandles } from './handles'
 import { logEvent } from './telemetry'
 import {
   asString,
@@ -114,6 +115,10 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
   }
 
   const known = new Set(claims.map((c) => c.id))
+  // One handle set for the whole pass, so every batch and every retry attempt
+  // renders identical text. Translated back to real uuids at parse time, so
+  // `known` and validateCited below are unchanged and still see real uuids.
+  const handles = issueHandles(known)
   const collected = await paginatedCollect({
     ctx: cfg.canonicalTable,
     userId,
@@ -122,10 +127,11 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
     system: cfg.system,
     heartbeat: cfg.heartbeat,
     itemsField: 'nodes',
+    handles,
     labelOf: (n) => asString(n.name),
     buildUser: (already, batchLimit) =>
       JSON.stringify({
-        claims: claims.map((c) => ({ id: c.id, data: c.data })),
+        claims: claims.map((c) => ({ id: handles.handleFor(c.id), data: c.data })),
         canonical_nodes: cfg.context.map((n) => ({ id: n.id, label: n.label, aliases: n.aliases, type: n.type })),
         already_emitted: already,
         batch_limit: batchLimit,
@@ -284,6 +290,7 @@ async function runRelationshipsPass(
   }
 
   const known = new Set(claims.map((c) => c.id))
+  const handles = issueHandles(known)
   const collected = await paginatedCollect({
     ctx: table,
     userId,
@@ -292,10 +299,14 @@ async function runRelationshipsPass(
     system: STAGE_C_RELATIONSHIPS_PROMPT,
     heartbeat,
     itemsField: 'edges',
+    handles,
     labelOf: (e) => `${asString(e.source_id) ?? ''}|${asString(e.target_id) ?? ''}|${(asString(e.relation) ?? '').toLowerCase()}`,
     buildUser: (already, batchLimit) =>
+      // Only relationship_claims are handled. canonical_nodes carries CANONICAL
+      // node uuids, a different id space, which the model echoes back as
+      // source_id / target_id and which must never be translated.
       JSON.stringify({
-        relationship_claims: claims.map((c) => ({ id: c.id, data: c.data })),
+        relationship_claims: claims.map((c) => ({ id: handles.handleFor(c.id), data: c.data })),
         canonical_nodes: nodes.map((n) => ({ id: n.id, label: n.label, aliases: n.aliases, type: n.type })),
         already_emitted: already,
         batch_limit: batchLimit,
@@ -407,6 +418,22 @@ async function runInsightsPass(
   const known = new Set<string>()
   for (const n of nodes) for (const id of n.source_claim_ids) known.add(id)
 
+  // This pass sends no `claims` array, but it still renders raw claim ids: every
+  // node's source_claim_ids ships inside canonical_layer and the model reproduces
+  // them in supporting_claim_ids. At 494 id occurrences it is the single largest
+  // identifier payload in the miner, so it is handled too. Each node's own `id`
+  // stays a canonical uuid: a different id space, echoed back as
+  // affected_entity_ids and stored directly. `hash` above is computed from the
+  // REAL layer, so which handles this run minted cannot disturb memoization.
+  const handles = issueHandles(known)
+  const handledLayer = {
+    ...layer,
+    nodes: layer.nodes.map((n) => ({
+      ...n,
+      source_claim_ids: n.source_claim_ids.map((id) => handles.handleFor(id)),
+    })),
+  }
+
   const collected = await paginatedCollect({
     ctx: table,
     userId,
@@ -415,9 +442,10 @@ async function runInsightsPass(
     system: STAGE_C_INSIGHTS_PROMPT,
     heartbeat,
     itemsField: 'insights',
+    handles,
     labelOf: (i) => asString(i.statement),
     buildUser: (already, batchLimit) =>
-      JSON.stringify({ canonical_layer: layer, already_emitted: already, batch_limit: batchLimit }),
+      JSON.stringify({ canonical_layer: handledLayer, already_emitted: already, batch_limit: batchLimit }),
     validate: (batch) => {
       for (const ins of batch) {
         const cited = uniqueStrings(ins.supporting_claim_ids)

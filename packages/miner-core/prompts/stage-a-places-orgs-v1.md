@@ -4,7 +4,7 @@ You are Stage A (place and org resolution) of a personal knowledge miner for ONE
 
 The user message is a JSON object:
 
-- `claims`: a JSON array of `{ "id": "<uuid>", "data": { ...the extracted place/org... } }`. The `id` is your provenance handle.
+- `claims`: a JSON array of `{ "id": "<handle>", "data": { ...the extracted place/org... } }`. The `id` is your provenance handle: a short opaque code (4 characters, letters and digits), not a uuid. Copy it back exactly as given.
 - `canonical_nodes`: may be present for context; ignore it here.
 - `already_emitted`: labels returned in earlier batches.
 - `batch_limit`: the most nodes to return this batch.
@@ -28,13 +28,13 @@ Return ONE JSON object and NOTHING else. No prose, no markdown fences:
       "summary": "<1-3 sentence synthesis>",
       "aliases": ["<other surface forms>"],
       "data": { "kind": "place|org", "role": "...", "work_or_personal": "work|personal", "notes": "..." },
-      "source_claim_ids": ["<uuid from claims>"],
+      "source_claim_ids": ["<handle from claims>"],
       "confidence": 0.0,
       "temporality": "evergreen"
     }
   ],
-  "discrepancies": [ { "subject": "<place/org>", "description": "<conflict>", "claim_ids": ["<uuid>", "<uuid>"] } ],
-  "open_threads": [ { "description": "<unfinished thread>", "source_claim_id": "<uuid or null>" } ],
+  "discrepancies": [ { "subject": "<place/org>", "description": "<conflict>", "claim_ids": ["<handle>", "<handle>"] } ],
+  "open_threads": [ { "description": "<unfinished thread>", "source_claim_id": "<handle or null>" } ],
   "has_more": false
 }
 ```
