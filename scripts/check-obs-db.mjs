@@ -144,6 +144,80 @@ try {
   if (bannedKeys.length === 0) ok('meta has no content-bearing key name')
   else bad('meta has a content-bearing key', bannedKeys.join(','))
 
+  // 4b. PRIVACY, miner per-model-call telemetry (event_type='llm_call').
+  // These rows are written by packages/miner-core/src/call-telemetry.ts, one per model
+  // call. The model's response text summarizes real people, so it is user content: it
+  // goes to stdout only (the Action log) and must never reach a table. The emitter
+  // filters through LLM_CALL_ATTR_KEYS; these assertions prove the property holds on
+  // the rows that actually landed. They are inert until the first mine writes some,
+  // and load-bearing from then on. Keep this list in sync with LLM_CALL_ATTR_KEYS.
+  const LLM_CALL_ATTR_KEYS = [
+    'pass', 'ctx', 'batch', 'attempt', 'attempts_allowed',
+    'batch_limit', 'claims_sent', 'already_emitted_sent', 'user_chars',
+    'stop_reason', 'text_chars', 'block_count', 'block_types', 'items_returned',
+    'tokens_in', 'tokens_out', 'tokens_thinking', 'cache_read', 'cache_write', 'duration_ms',
+    'outcome', 'error_class', 'rejected_claim_id',
+  ]
+  // The scan, factored out so it can be exercised on a known-dirty row below. Returns
+  // the violations found, so an empty result is a pass.
+  const scanLlmCallRows = (rows) => {
+    const stray = new Set()
+    const banned = new Set()
+    const long = new Set()
+    for (const row of rows) {
+      for (const [k, v] of Object.entries(row.attrs || {})) {
+        if (!LLM_CALL_ATTR_KEYS.includes(k)) stray.add(k)
+        if (/^(transcript|body|prompt|content|answer|question|message|summary|label|text|raw)$/i.test(k)) banned.add(k)
+        // model output is LONG free text; every legitimate attr here is an id, a count,
+        // an enum, or a short array of block-type names.
+        if (typeof v === 'string' && v.length > 120) long.add(k)
+        if (Array.isArray(v) && v.some((x) => typeof x === 'string' && x.length > 120)) long.add(k)
+      }
+    }
+    return { stray: [...stray], banned: [...banned], long: [...long] }
+  }
+
+  // Prove the scan is not a no-op BEFORE trusting it on live rows: a row carrying a
+  // slab of model prose under a plausible key must be caught on all three axes.
+  // In-memory only; nothing is written to any table.
+  const dirty = scanLlmCallRows([
+    { attrs: { pass: 'canonical_people', summary: 'Mal Corpus is one of the oldest friends from the surf club. '.repeat(4) } },
+  ])
+  if (dirty.stray.includes('summary') && dirty.banned.includes('summary') && dirty.long.includes('summary')) {
+    ok('llm_call privacy scan catches a planted model-output attr (assertion is not vacuous)')
+  } else bad('llm_call privacy scan failed to catch planted content', JSON.stringify(dirty))
+
+  const callRows = await sql(`
+    select name, attrs from public.telemetry_events
+    where event_type = 'llm_call' order by created_at desc limit 500;`)
+  const found = scanLlmCallRows(callRows)
+  ok(`llm_call telemetry readable (${callRows.length} row(s) present)`)
+  if (found.stray.length === 0) ok('llm_call attrs carry only whitelisted shaped keys')
+  else bad('llm_call attrs have keys outside the whitelist', found.stray.join(','))
+  if (found.banned.length === 0) ok('llm_call attrs have no content-bearing key name')
+  else bad('llm_call attrs have a content-bearing key', found.banned.join(','))
+  if (found.long.length === 0) ok('llm_call attrs are all short/shaped (no model output can be hiding in them)')
+  else bad('llm_call attrs have long string values', found.long.join(','))
+
+  // The highest-risk column is miner_runs.error, because mineWithLock persists a thrown
+  // Error message there. parseModelObject used to embed a 200-character slice of the
+  // model's response in that message, which put user content (summaries of real people)
+  // into the database. It now embeds shaped metadata and prints the full text to stdout.
+  //
+  // Rows written by the NEW format are identifiable by the stdout marker. We assert the
+  // property only on those, because rows predating this change still carry a slice and
+  // are ground truth we do not rewrite. The historical count is surfaced, not failed on.
+  const errRows = await sql(`
+    select coalesce(error, '') as error from public.miner_runs
+    where error is not null and error <> '' order by started_at desc limit 100;`)
+  const STDOUT_MARKER = 'full output printed to stdout'
+  const newFormat = errRows.filter((r) => r.error.includes(STDOUT_MARKER))
+  const newFormatLeaking = newFormat.filter((r) => /valid JSON \(.*\)\s*:\s*[{[]/s.test(r.error))
+  if (newFormatLeaking.length === 0) ok(`miner_runs.error: no new-format row carries a model-output slice (${newFormat.length} new-format row(s))`)
+  else bad('miner_runs.error carries model output', `${newFormatLeaking.length} new-format row(s)`)
+  const legacyLeaking = errRows.filter((r) => !r.error.includes(STDOUT_MARKER) && /valid JSON \(.*\)\s*:\s*[{[]/s.test(r.error))
+  ok(`miner_runs.error: ${legacyLeaking.length} legacy row(s) predating this change still carry a slice (reported, not rewritten)`)
+
   // 5. clean up and confirm zero residue.
   await sql(`delete from public.observability_events where meta->>'smoke' = '${q(TAG)}';`)
   const left = await sql(`select count(*)::int as n from public.observability_events where meta->>'smoke' = '${q(TAG)}';`)
