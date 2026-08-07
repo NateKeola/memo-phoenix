@@ -133,8 +133,19 @@ A capture can be ABOUT a person, a commitment, or a chat topic: `captures.target
 
 ## Blocking Phase 2
 
+- MIGRATION NUMBERING: the next free number is **0023**. 0022 (redact model output from operational columns) is in PR #48. Phase 1's scope migrations start at 0023, not 0022. Check `supabase/migrations/` before numbering anything.
+
 - FREE-TEXT COLUMN REGISTRY. Every text and jsonb column in `public` classified once as content-permitted or shaped-only, with the security harness enforcing the classification by construction. TODAY the check is a hand-written list of four columns in `check-obs-db.mjs`, which is exactly the failure mode that let this leak sit undetected: the guard shipped on 2026-08-06 found 2 of 3 dirty `miner_runs.error` rows because its regex only matched the shape already known, and only a manual enumeration of all 93 text/jsonb columns across 35 tables found the other two dirty columns (`miner_runs.summary`, `telemetry_events.attrs`). A registry catches the next one without anybody thinking to look. Deferred to Phase 2 rather than done here because Phase 2 takes the harness from 8 surfaces to 11 anyway, and the registry belongs with that restructure rather than bolted onto the observability surface. The interim guard is real and hard-failing; it is just not general.
 - The three guards that still hard-delete auth users (`check-table-isolation.mjs`, `check-avatar-isolation.mjs`, `check-invite.mjs`) must be converted to the permanent guard accounts. None creates orphans today, so none is blocking work, but the rule is not enforced until they are converted.
+
+## Where the redacted content belongs instead (design note, not debt)
+
+Migration 0022 strips `discrepancyItems` from `miner_runs.summary` and `routing_hint` from `telemetry_events.attrs`. Both had a real reason to exist and both were in the wrong place. This records the right place, so the next person to need them builds it properly rather than putting them back.
+
+- DISCREPANCIES AND OPEN THREADS BELONG IN THEIR OWN TABLES. `public.discrepancies` and `public.open_threads` already exist (migration 0006), both carry `user_id`, both are RLS-enabled AND forced with a per-user policy (verified live). The miner has always COMPUTED both and never persisted either: `paginatedCollect` returns `discrepancyItems` and an `open_threads` count, derivation consumes the discrepancies in-run for supersession, and the rest was only ever incidentally visible because it rode along in the summary blob. Stripping the blob removes the only place they currently land, and that is correct: a summary blob is telemetry, it is admin-authorized, and it is the wrong home for per-user knowledge about contradictions in someone's life. When Phase 4's context-filling game needs them (it surfaces the miner's uncertainty as light prompts), they get WRITTEN TO `discrepancies` and `open_threads` with proper `user_id` scoping and, after Phase 1, a `scope_id`. Never back into a summary blob, and never into telemetry.
+- `routing_hint` IS USER-AUTHORED TEXT AND BELONGS IN A USER-OWNED COLUMN. It already has one: `captures.routing_hint`, which is where the real value lives and stays. The telemetry copy was duplication into an admin-authorized table, and it now records `routing_hint_chars` instead. When directed interviews land and the hint becomes something the product reads back rather than something the miner reads once, it is read from the capture row, not reconstructed from telemetry.
+
+Both are better designs than what 0022 removes. Neither is a regression to pay back.
 
 ## Standing rules and architectural invariants (do not drift)
 

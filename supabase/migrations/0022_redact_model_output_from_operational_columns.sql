@@ -37,36 +37,55 @@
 -- how many characters were dropped so the redaction is auditable.
 --
 -- ATOMICITY
--- One plpgsql DO block containing the pre-count assertions, the updates and the
--- post-count assertions. A plpgsql block is atomic in itself, so any `raise
--- exception` rolls back every write the block made.
+-- One plpgsql DO block. A plpgsql block is atomic in itself, so any `raise exception`
+-- rolls back every write the block made.
+--
+-- NO EXPECTED-COUNT TRIPWIRE, DELIBERATELY. 0021 asserted exactly 578 rows because a
+-- drift there meant the guard fix had failed, which is a real alarm. Here a drift just
+-- means the operator used their own app: telemetry_events is written on every capture,
+-- and miner_runs on every mine. An exact count would be stale the moment Memo is used.
+--
+-- So the shape is: SNAPSHOT the matching ids, assert at least one matched, redact
+-- exactly those ids, then assert exactly those ids are clean. Scoping the post-check to
+-- the snapshot matters on a live table: an unscoped re-count would see a row the app
+-- committed mid-migration and roll back the entire redaction over a row this run never
+-- claimed to handle. Rows that arrive during the run are counted and reported as a
+-- NOTICE telling the operator to re-run, never as a failure.
 --
 -- IDEMPOTENT
--- If zero content-bearing rows remain, it raises a notice and returns without
--- writing. Re-running is a no-op.
+-- If zero content-bearing rows match, it raises a notice and returns without writing.
+-- Re-running is a no-op, and re-running is also the correct response to the arrival
+-- notice above.
 
 do $$
 declare
-  err_dirty        int;
-  summary_dirty    int;
-  attrs_dirty      int;
+  -- Predicates are repeated verbatim in the snapshot, the update and the post-check.
+  -- Keep them in sync; they are the definition of "content-bearing" for this migration.
+  err_ids          uuid[];
+  summary_ids      uuid[];
+  attrs_ids        uuid[];
+  matched          int;
   err_after        int;
   summary_after    int;
   attrs_after      int;
+  arrived          int;
   redacted_errors  int;
   redacted_summary int;
   redacted_attrs   int;
 begin
-  -- Content-bearing row counts, by the same tests the security harness uses.
-  -- miner_runs.error: either a JSON slice after the parser message, or a quoted
+  -- 0. SNAPSHOT the ids that match right now. Everything below is scoped to these.
+
+  -- miner_runs.error: a JSON slice after the parser message, or a quoted
   -- model-authored node label.
-  select count(*) into err_dirty
+  select coalesce(array_agg(id), '{}')
+    into err_ids
     from public.miner_runs
    where error is not null and error <> ''
      and (error ~ 'valid JSON \(.*\)\s*:\s*[{\[]' or error ~ 'node "[^"]+"');
 
   -- miner_runs.summary: any pass carrying a non-empty discrepancyItems array.
-  select count(*) into summary_dirty
+  select coalesce(array_agg(id), '{}')
+    into summary_ids
     from public.miner_runs
    where summary is not null
      and exists (
@@ -76,22 +95,33 @@ begin
           and jsonb_array_length(p->'discrepancyItems') > 0
      );
 
-  -- telemetry_events.attrs: the capture event's verbatim routing_hint.
-  select count(*) into attrs_dirty
+  -- telemetry_events.attrs: the capture event's verbatim routing_hint. ANY non-empty
+  -- value, not just a long one: a four-character hint is still user text.
+  select coalesce(array_agg(id), '{}')
+    into attrs_ids
     from public.telemetry_events
    where attrs ? 'routing_hint'
      and coalesce(attrs->>'routing_hint', '') <> '';
 
-  if err_dirty = 0 and summary_dirty = 0 and attrs_dirty = 0 then
-    raise notice '0022 is ALREADY APPLIED. No content-bearing rows remain in miner_runs.error, miner_runs.summary or telemetry_events.attrs. Nothing to do. THIS IS SUCCESS, not a failure, and no data was touched.';
+  matched := coalesce(array_length(err_ids, 1), 0)
+           + coalesce(array_length(summary_ids, 1), 0)
+           + coalesce(array_length(attrs_ids, 1), 0);
+
+  if matched = 0 then
+    raise notice '0022 is ALREADY APPLIED. No content-bearing rows match in miner_runs.error, miner_runs.summary or telemetry_events.attrs. Nothing to do. THIS IS SUCCESS, not a failure, and no data was touched.';
     return;
   end if;
 
-  raise notice '0022 redacting: miner_runs.error=% row(s), miner_runs.summary=% row(s), telemetry_events.attrs=% row(s)', err_dirty, summary_dirty, attrs_dirty;
+  raise notice '0022 redacting % row(s): miner_runs.error=%, miner_runs.summary=%, telemetry_events.attrs=%',
+    matched,
+    coalesce(array_length(err_ids, 1), 0),
+    coalesce(array_length(summary_ids, 1), 0),
+    coalesce(array_length(attrs_ids, 1), 0);
 
   -- 1. miner_runs.error. Keep everything up to the parser message's closing paren, or
-  -- up to the rejected-id clause, and replace the rest with a marker recording the
-  -- dropped character count.
+  -- the rejected-id clause, and replace the rest with a marker recording the dropped
+  -- character count. The predicate is repeated alongside the id scope so a row that
+  -- changed since the snapshot is skipped rather than mangled.
   with redacted as (
     update public.miner_runs m
        set error = case
@@ -103,7 +133,8 @@ begin
              else
                regexp_replace(m.error, 'node "[^"]+"', 'node [label redacted by 0022]')
            end
-     where m.error is not null and m.error <> ''
+     where m.id = any(err_ids)
+       and m.error is not null and m.error <> ''
        and (m.error ~ 'valid JSON \(.*\)\s*:\s*[{\[]' or m.error ~ 'node "[^"]+"')
     returning 1
   )
@@ -122,13 +153,8 @@ begin
                  from jsonb_array_elements(m.summary->'passes') with ordinality t(p, ord)
              )
            )
-     where m.summary is not null
-       and exists (
-         select 1
-           from jsonb_array_elements(coalesce(m.summary->'passes', '[]'::jsonb) ) p
-          where jsonb_typeof(p->'discrepancyItems') = 'array'
-            and jsonb_array_length(p->'discrepancyItems') > 0
-       )
+     where m.id = any(summary_ids)
+       and m.summary is not null
     returning 1
   )
   select count(*) into redacted_summary from redacted;
@@ -139,21 +165,24 @@ begin
     update public.telemetry_events t
        set attrs = (t.attrs - 'routing_hint')
                    || jsonb_build_object('routing_hint_chars', length(coalesce(t.attrs->>'routing_hint', '')))
-     where t.attrs ? 'routing_hint'
-       and coalesce(t.attrs->>'routing_hint', '') <> ''
+     where t.id = any(attrs_ids)
+       and t.attrs ? 'routing_hint'
     returning 1
   )
   select count(*) into redacted_attrs from redacted;
 
-  -- Post-assertions: zero content-bearing rows may remain anywhere.
+  -- 4. POST-ASSERT, scoped to the snapshot. These must be zero: they are the rows this
+  -- run claimed to fix.
   select count(*) into err_after
     from public.miner_runs
-   where error is not null and error <> ''
+   where id = any(err_ids)
+     and error is not null and error <> ''
      and (error ~ 'valid JSON \(.*\)\s*:\s*[{\[]' or error ~ 'node "[^"]+"');
 
   select count(*) into summary_after
     from public.miner_runs
-   where summary is not null
+   where id = any(summary_ids)
+     and summary is not null
      and exists (
        select 1
          from jsonb_array_elements(coalesce(summary->'passes', '[]'::jsonb)) p
@@ -163,18 +192,41 @@ begin
 
   select count(*) into attrs_after
     from public.telemetry_events
-   where attrs ? 'routing_hint'
+   where id = any(attrs_ids)
+     and attrs ? 'routing_hint'
      and coalesce(attrs->>'routing_hint', '') <> '';
 
   if err_after <> 0 then
-    raise exception '0022 FAILED: % miner_runs.error row(s) still carry model output. Rolled back.', err_after;
+    raise exception '0022 FAILED: % snapshotted miner_runs.error row(s) still carry model output. Rolled back.', err_after;
   end if;
   if summary_after <> 0 then
-    raise exception '0022 FAILED: % miner_runs.summary row(s) still carry discrepancyItems. Rolled back.', summary_after;
+    raise exception '0022 FAILED: % snapshotted miner_runs.summary row(s) still carry discrepancyItems. Rolled back.', summary_after;
   end if;
   if attrs_after <> 0 then
-    raise exception '0022 FAILED: % telemetry_events.attrs row(s) still carry routing_hint. Rolled back.', attrs_after;
+    raise exception '0022 FAILED: % snapshotted telemetry_events.attrs row(s) still carry routing_hint. Rolled back.', attrs_after;
   end if;
 
-  raise notice '0022 OK. Redacted % miner_runs.error, % miner_runs.summary, % telemetry_events.attrs. Zero content-bearing rows remain.', redacted_errors, redacted_summary, redacted_attrs;
+  -- 5. Rows that started matching AFTER the snapshot. Not a failure: on a live table
+  -- the app may have written one mid-run, and pre-deploy the old emitter is still
+  -- running. Report and let the operator re-run. NEVER relax the guard instead.
+  select
+      (select count(*) from public.miner_runs
+        where not (id = any(err_ids)) and error is not null and error <> ''
+          and (error ~ 'valid JSON \(.*\)\s*:\s*[{\[]' or error ~ 'node "[^"]+"'))
+    + (select count(*) from public.miner_runs
+        where not (id = any(summary_ids)) and summary is not null
+          and exists (select 1 from jsonb_array_elements(coalesce(summary->'passes', '[]'::jsonb)) p
+                       where jsonb_typeof(p->'discrepancyItems') = 'array'
+                         and jsonb_array_length(p->'discrepancyItems') > 0))
+    + (select count(*) from public.telemetry_events
+        where not (id = any(attrs_ids)) and attrs ? 'routing_hint'
+          and coalesce(attrs->>'routing_hint', '') <> '')
+    into arrived;
+
+  if arrived > 0 then
+    raise notice '0022 NOTE: % row(s) began matching AFTER this run snapshotted. The app was in use, or the emitter fix has not deployed yet. They are NOT redacted by this run. RE-RUN 0022. Do not relax the guard, exempt a column, or change the assertion.', arrived;
+  end if;
+
+  raise notice '0022 OK. Redacted % miner_runs.error, % miner_runs.summary, % telemetry_events.attrs. Every snapshotted row is clean.',
+    redacted_errors, redacted_summary, redacted_attrs;
 end $$;
