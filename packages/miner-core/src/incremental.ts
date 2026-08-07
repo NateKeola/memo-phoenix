@@ -20,6 +20,7 @@
 // derive.ts runNodePass; keep the two in sync (a flagged-feature maintenance note).
 
 import { admin } from './supabase'
+import { issueHandles } from './handles'
 import { logEvent } from './telemetry'
 import { canonicalId, canonicalPersonId, normalizeLabel, splitName } from './identity'
 import {
@@ -298,6 +299,9 @@ async function incNodePass(userId: string, cfg: IncNodeConfig): Promise<PassResu
   if (claims.length === 0) return emptyPass(cfg.canonicalTable, true) // no new claims for this table
 
   const known = new Set(claims.map((c) => c.id))
+  // One handle set for the whole pass (see handles.ts); translated back to real
+  // uuids at parse time, so `known` and validateCited below are unchanged.
+  const handles = issueHandles(known)
   const collected = await paginatedCollect({
     ctx: `${cfg.canonicalTable} (incremental)`,
     userId,
@@ -306,10 +310,11 @@ async function incNodePass(userId: string, cfg: IncNodeConfig): Promise<PassResu
     system: cfg.system,
     heartbeat: cfg.heartbeat,
     itemsField: 'nodes',
+    handles,
     labelOf: (n) => asString(n.name),
     buildUser: (already, batchLimit) =>
       JSON.stringify({
-        claims: claims.map((c) => ({ id: c.id, data: c.data })),
+        claims: claims.map((c) => ({ id: handles.handleFor(c.id), data: c.data })),
         canonical_nodes: cfg.context.map((n) => ({ id: n.id, label: n.label, aliases: n.aliases, type: n.type })),
         already_emitted: already,
         batch_limit: batchLimit,
@@ -421,6 +426,7 @@ async function incRelationshipsPass(
   const nodeIds = new Set(nodes.map((n) => n.id))
   const labelById = new Map(nodes.map((n) => [n.id, n.label ?? '']))
   const known = new Set(claims.map((c) => c.id))
+  const handles = issueHandles(known)
   const collected = await paginatedCollect({
     ctx: `${table} (incremental)`,
     userId,
@@ -429,10 +435,13 @@ async function incRelationshipsPass(
     system: STAGE_C_RELATIONSHIPS_PROMPT,
     heartbeat,
     itemsField: 'edges',
+    handles,
     labelOf: (e) => `${asString(e.source_id) ?? ''}|${asString(e.target_id) ?? ''}|${(asString(e.relation) ?? '').toLowerCase()}`,
     buildUser: (already, batchLimit) =>
+      // Only relationship_claims are handled; canonical_nodes carries canonical
+      // node uuids, which come back as source_id / target_id and stay untranslated.
       JSON.stringify({
-        relationship_claims: claims.map((c) => ({ id: c.id, data: c.data })),
+        relationship_claims: claims.map((c) => ({ id: handles.handleFor(c.id), data: c.data })),
         canonical_nodes: nodes.map((n) => ({ id: n.id, label: n.label, aliases: n.aliases, type: n.type })),
         already_emitted: already,
         batch_limit: batchLimit,

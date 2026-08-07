@@ -27,6 +27,7 @@
     "miner": "tsx packages/miner-core/src/cli.ts",
     "seed": "tsx packages/miner-core/src/seed.ts",
     "check:pages": "tsx scripts/check-page-limit.ts",
+    "check:handles": "tsx scripts/check-handles.ts",
     "seed:guards": "node scripts/seed-guard-accounts.mjs",
     "check:orphans": "tsx scripts/check-orphans.ts",
     "prepare": "git config core.hooksPath .githooks || true",
