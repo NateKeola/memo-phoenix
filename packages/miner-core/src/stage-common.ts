@@ -1,5 +1,13 @@
 import { MAX_BATCHES, MAX_BATCH_ATTEMPTS, pageLimit } from './config'
-import { callClaude, parseModelObject } from './anthropic'
+import { callClaude, decorateWithLlmMeta, parseModelObject, type LlmResult } from './anthropic'
+import {
+  classifyLlmError,
+  rejectedClaimId,
+  reportLlmCall,
+  stopReasonFrom,
+  usageAttrs,
+  type LlmCallPhase,
+} from './call-telemetry'
 import { admin } from './supabase'
 import { canonicalJson, sha256 } from './identity'
 import { addUsage, emptyUsage, type DiscrepancyItem, type ModelNode, type Usage } from './types'
@@ -164,6 +172,12 @@ function parseDiscrepancy(v: unknown): DiscrepancyItem | null {
 // provenance, so an occasional malformed response never dooms the run.
 export async function paginatedCollect(opts: {
   ctx: string
+  // the user this pass belongs to, so every model call can emit a telemetry row.
+  // Instrumentation only: nothing in the loop branches on it.
+  userId: string
+  // how many raw claims the user message carries. Shaped count for the per-call
+  // telemetry; the collect loop never reads it.
+  claimCount?: number
   // the canonical table this pass emits, so verbose types (people/facts/insights)
   // page smaller (pageLimit). Falls back to the global page size when absent.
   table?: string
@@ -195,18 +209,66 @@ export async function paginatedCollect(opts: {
     let lastErr: unknown = null
     for (let attempt = 1; attempt <= MAX_BATCH_ATTEMPTS; attempt++) {
       if (opts.heartbeat) await opts.heartbeat()
-      const res = await callClaude(opts.system, user)
-      usage = addUsage(usage, res.usage)
+      // Shaped description of the call about to be made. Instrumentation only:
+      // nothing below branches on it.
+      const call: Record<string, unknown> = {
+        pass: opts.table ?? opts.ctx,
+        ctx: opts.ctx,
+        batch: i + 1,
+        attempt,
+        attempts_allowed: MAX_BATCH_ATTEMPTS,
+        batch_limit: batchLimit,
+        claims_sent: opts.claimCount,
+        already_emitted_sent: already.length,
+        user_chars: user.length,
+      }
+      const startedAt = Date.now()
+      let res: LlmResult
       try {
-        const parsed = parseModelObject(res.raw, `${opts.ctx} batch ${i + 1}`)
+        res = await callClaude(opts.system, user)
+      } catch (err) {
+        // The call itself failed (no text returned, or an API error). Record it, then
+        // RETHROW UNCHANGED. This path deliberately does not retry (it sits outside
+        // the parse/validate try below), and that behaviour is preserved exactly.
+        await reportLlmCall(opts.userId, {
+          ...call,
+          duration_ms: Date.now() - startedAt,
+          outcome: 'error',
+          error_class: classifyLlmError('call', err),
+          stop_reason: stopReasonFrom(err),
+        })
+        throw err
+      }
+      usage = addUsage(usage, res.usage)
+      let phase: LlmCallPhase = 'parse'
+      try {
+        const parsed = parseModelObject(res.raw, `${opts.ctx} batch ${i + 1}`, res.meta)
         const batch = Array.isArray(parsed[opts.itemsField])
           ? (parsed[opts.itemsField] as Array<Record<string, unknown>>)
           : []
+        phase = 'validate'
         if (opts.validate) opts.validate(batch)
         out = parsed
+        await reportLlmCall(opts.userId, {
+          ...call,
+          ...usageAttrs(res.meta),
+          duration_ms: Date.now() - startedAt,
+          outcome: 'ok',
+          items_returned: batch.length,
+        })
         break
       } catch (err) {
-        lastErr = err
+        // Carry the call metadata on the error too, so a provenance rejection arrives
+        // with the same context a parse failure has (and lands in miner_runs.error).
+        lastErr = decorateWithLlmMeta(err, res.meta)
+        await reportLlmCall(opts.userId, {
+          ...call,
+          ...usageAttrs(res.meta),
+          duration_ms: Date.now() - startedAt,
+          outcome: 'error',
+          error_class: classifyLlmError(phase, err),
+          rejected_claim_id: rejectedClaimId(err),
+        })
         if (attempt < MAX_BATCH_ATTEMPTS) {
           console.warn(
             `[miner] ${opts.ctx} batch ${i + 1} attempt ${attempt}/${MAX_BATCH_ATTEMPTS} failed: ${err instanceof Error ? err.message : String(err)}; retrying`

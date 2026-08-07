@@ -300,6 +300,8 @@ async function incNodePass(userId: string, cfg: IncNodeConfig): Promise<PassResu
   const known = new Set(claims.map((c) => c.id))
   const collected = await paginatedCollect({
     ctx: `${cfg.canonicalTable} (incremental)`,
+    userId,
+    claimCount: claims.length,
     table: cfg.canonicalTable,
     system: cfg.system,
     heartbeat: cfg.heartbeat,
@@ -413,6 +415,8 @@ async function incRelationshipsPass(
   const known = new Set(claims.map((c) => c.id))
   const collected = await paginatedCollect({
     ctx: `${table} (incremental)`,
+    userId,
+    claimCount: claims.length,
     table,
     system: STAGE_C_RELATIONSHIPS_PROMPT,
     heartbeat,
