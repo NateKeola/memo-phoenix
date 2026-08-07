@@ -168,6 +168,16 @@ export function stripFences(text: string): string {
   return (m ? m[1] : t).trim()
 }
 
+// V8 embeds a slice of the INPUT in some parse messages
+// (`Unexpected token 'H', "Here is th"... is not valid JSON`). That slice is model
+// output, so it is cut here before the message goes into a thrown Error that
+// mineWithLock persists to miner_runs.error. The position/line/column forms carry no
+// input and pass through whole. The full text is on stdout either way.
+export function structuralParseMessage(message: string): string {
+  const cut = message.indexOf(', "')
+  return cut === -1 ? message : `${message.slice(0, cut)} (input snippet withheld; see stdout)`
+}
+
 // `meta` is optional so this stays callable without a Message, but every caller in the
 // miner passes it. The thrown Error carries the SHAPED metadata, not a text slice: the
 // previous `stripped.slice(0, 200)` put model-authored prose (summaries of real people)
@@ -181,7 +191,7 @@ export function parseModelObject(raw: string, ctx: string, meta?: LlmMeta): Reco
   } catch (err) {
     dumpModelOutput(ctx, stripped, meta)
     throw new Error(
-      `[miner] ${ctx}: model did not return valid JSON (${err instanceof Error ? err.message : String(err)})` +
+      `[miner] ${ctx}: model did not return valid JSON (${structuralParseMessage(err instanceof Error ? err.message : String(err))})` +
         ` [${meta ? describeLlmMeta(meta) : 'llm meta unavailable'}]` +
         ` [full output printed to stdout, ${stripped.length} chars]`
     )

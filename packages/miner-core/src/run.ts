@@ -165,6 +165,22 @@ export function isRunStale(row: { started_at: string; heartbeat_at?: string | nu
 // audit trail, and the status the "building your memory" UI polls. Both the Vercel
 // run route and the CLI (local or GitHub Action) go through this, so two runs for
 // the same user can never collide regardless of which runtime triggered them.
+
+// miner_runs.summary is a database column, so it is shaped. A PassResult carries
+// `discrepancyItems`, whose `subject` and `description` are model-authored prose about
+// real people; they are consumed IN-RUN by supersedeFromDiscrepancies before mine()
+// returns, and nothing reads them back off the row. The count (`discrepancies`) is
+// shaped and stays.
+function shapedSummary(summary: MineSummary): MineSummary {
+  return {
+    ...summary,
+    passes: summary.passes.map((p) => {
+      const { discrepancyItems: _dropped, ...shaped } = p
+      return shaped
+    }),
+  }
+}
+
 export async function mineWithLock(
   userId: string,
   opts: { trigger: string; runtime: string }
@@ -270,7 +286,7 @@ export async function mineWithLock(
     summary.durationMs = Date.now() - started
     await db
       .from('miner_runs')
-      .update({ status: 'done', summary, ended_at: new Date().toISOString() })
+      .update({ status: 'done', summary: shapedSummary(summary), ended_at: new Date().toISOString() })
       .eq('user_id', userId)
       .eq('id', runId)
     return { status: 'done', runId, summary }

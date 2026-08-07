@@ -91,7 +91,9 @@ export async function writeCapture(
     attrs: {
       mode: input.mode,
       modality: input.modality,
-      routing_hint: input.routingHint ?? null,
+      // the hint itself is user-authored text about real people; telemetry gets its
+      // size, not its content (the capture row holds the real thing).
+      routing_hint_chars: input.routingHint?.length ?? 0,
       target_kind: input.targetKind ?? null,
       target_id: input.targetId ?? null,
     },

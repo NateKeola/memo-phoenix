@@ -186,7 +186,9 @@ export async function paginatedCollect(opts: {
   labelOf: (item: Record<string, unknown>) => string | null
   // build the user message given what was already emitted + the batch cap
   buildUser: (alreadyEmitted: string[], batchLimit: number) => string
-  validate?: (batchItems: Array<Record<string, unknown>>) => void
+  // batchNo lets a validator name the failing item by POSITION rather than by its
+  // model-authored label, since the thrown Error is persisted to miner_runs.error.
+  validate?: (batchItems: Array<Record<string, unknown>>, batchNo: number) => void
   // called before EVERY model call so the run heartbeat stays fresher than the
   // staleness threshold even inside a long multi-batch pass (a pass-entry-only
   // beat left a multi-page pass silent long enough to be falsely reclaimed)
@@ -247,7 +249,7 @@ export async function paginatedCollect(opts: {
           ? (parsed[opts.itemsField] as Array<Record<string, unknown>>)
           : []
         phase = 'validate'
-        if (opts.validate) opts.validate(batch)
+        if (opts.validate) opts.validate(batch, i + 1)
         out = parsed
         await reportLlmCall(opts.userId, {
           ...call,

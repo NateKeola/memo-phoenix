@@ -314,14 +314,22 @@ async function incNodePass(userId: string, cfg: IncNodeConfig): Promise<PassResu
         already_emitted: already,
         batch_limit: batchLimit,
       }),
-    validate: (batch) => {
-      for (const node of batch) {
+    validate: (batch, batchNo) => {
+      batch.forEach((node, idx) => {
         const cited = uniqueStrings(node.source_claim_ids)
-        validateCited(cited, known, `${cfg.canonicalTable} node "${asString(node.name) ?? '(unnamed)'}"`)
-        if (cited.length === 0) {
-          throw new Error(`[miner] ${cfg.canonicalTable}: node "${asString(node.name) ?? '(unnamed)'}" has empty source_claim_ids`)
+        // The position, never the label: this string ends up in the thrown Error, and
+        // mineWithLock persists that to miner_runs.error. The label is model-authored.
+        const where = `${cfg.canonicalTable} node #${idx + 1} of batch ${batchNo}`
+        try {
+          validateCited(cited, known, where)
+          if (cited.length === 0) throw new Error(`[miner] ${where} has empty source_claim_ids`)
+        } catch (err) {
+          // Name the node on stdout, where content is allowed, so the Action log still
+          // says WHO failed while the persisted error stays shaped.
+          console.warn(`[miner] ${where} is "${asString(node.name) ?? '(unnamed)'}"`)
+          throw err
         }
-      }
+      })
     },
   })
 
