@@ -200,35 +200,44 @@ try {
   else bad('llm_call attrs have long string values', found.long.join(','))
 
   // 4c. PRIVACY, the operational columns that persist an exception or a telemetry
-  // payload. THESE ARE HARD ASSERTIONS. The rule they enforce: anything persisted to a
-  // database column is shaped, anything written to stdout may be full. A soft report
-  // here is worse than a failure, because the harness certified 8 of 8 for weeks while
-  // three rows of user content sat in miner_runs.error that nothing ever looked at.
+  // payload. THESE ARE HARD ASSERTIONS. The rule: anything persisted to a database
+  // column is shaped, anything written to stdout may be full. A soft report here is
+  // worse than a failure, because the harness certified 8 of 8 for weeks while three
+  // columns held content that nothing ever looked at.
   //
-  // Cleared by migration 0022; until it applies these SHOULD fail, and that is the
-  // guard working.
-  const leaks = []
+  // ONE PREDICATE PER COLUMN. These call the SAME SQL functions migration 0022 uses
+  // for its snapshot, its UPDATE guard and its post-check. There is no fourth copy of
+  // any regex here to drift out of sync. If 0022 has not applied yet the functions do
+  // not exist, which is reported as a distinct state rather than a silent pass.
+  const fnCheck = await sql(`
+    select count(*)::int as n from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and p.proname in ('mp_error_has_content','mp_summary_has_content','mp_attrs_has_content',
+                         'mp_error_redact','mp_summary_redact','mp_attrs_redact',
+                         'mp_routing_hint_is_code_constant');`)
+  const fnCount = fnCheck[0]?.n ?? 0
+  if (fnCount === 7) {
+    ok('content predicates are defined in SQL (7/7), shared with migration 0022')
+  } else {
+    bad('content predicate functions missing', `${fnCount}/7 present; migration 0022 has not applied`)
+  }
 
-  // miner_runs.error: mineWithLock persists a thrown Error here. Two shapes have
-  // leaked: a JSON slice after the parser message, and the model-chosen canonical
-  // LABEL embedded in the error context ('node "Jen Skinner"').
-  const errRows = await sql(`
-    select coalesce(error, '') as error from public.miner_runs
-    where error is not null and error <> '' order by started_at desc limit 200;`)
-  const errDirty = errRows.filter((r) => /valid JSON \(.*\)\s*:\s*[{[]/s.test(r.error) || /node "[^"]+"/.test(r.error))
-  if (errDirty.length === 0) ok('miner_runs.error carries no model-authored content')
-  else { bad('miner_runs.error carries model-authored content', `${errDirty.length} row(s); migration 0022 clears them`); leaks.push('miner_runs.error') }
-
-  // miner_runs.summary: PassResult.discrepancyItems carries model-authored `subject`
-  // and `description` prose. The shaped `discrepancies` COUNT is fine and stays.
-  const sumDirty = await sql(`
-    select count(*)::int as n from public.miner_runs
-     where summary is not null
-       and exists (select 1 from jsonb_array_elements(coalesce(summary->'passes','[]'::jsonb)) p
-                    where jsonb_typeof(p->'discrepancyItems') = 'array'
-                      and jsonb_array_length(p->'discrepancyItems') > 0);`)
-  if ((sumDirty[0]?.n ?? -1) === 0) ok('miner_runs.summary carries no model-authored discrepancy prose')
-  else { bad('miner_runs.summary carries discrepancyItems', `${sumDirty[0].n} row(s); migration 0022 clears them`); leaks.push('miner_runs.summary') }
+  if (fnCount === 7) {
+    const leaks = []
+    const dirty = await sql(`
+      select
+        (select count(*) from public.miner_runs where public.mp_error_has_content(error))        as err,
+        (select count(*) from public.miner_runs where public.mp_summary_has_content(summary))    as summ,
+        (select count(*) from public.telemetry_events where public.mp_attrs_has_content(attrs))  as attrs;`)
+    const d = dirty[0] || {}
+    if ((d.err ?? -1) === 0) ok('miner_runs.error carries no model-authored content')
+    else { bad('miner_runs.error carries model-authored content', `${d.err} row(s)`); leaks.push('miner_runs.error') }
+    if ((d.summ ?? -1) === 0) ok('miner_runs.summary carries no model-authored discrepancy prose')
+    else { bad('miner_runs.summary carries discrepancyItems', `${d.summ} row(s)`); leaks.push('miner_runs.summary') }
+    if ((d.attrs ?? -1) === 0) ok('telemetry_events.attrs carries no user-authored routing_hint')
+    else { bad('telemetry_events.attrs carries a user routing_hint', `${d.attrs} row(s)`); leaks.push('telemetry_events.attrs') }
+    if (leaks.length) console.log(`\n  NOTE: ${leaks.length} column(s) still carry content: ${leaks.join(', ')}. Re-run migration 0022. Do NOT relax this assertion.\n`)
+  }
 
   // observability_events.error_message: free text on the one table that HAS a privacy
   // assertion, and it was exempt from it. Same shaping test as meta values.
@@ -236,18 +245,8 @@ try {
     select coalesce(error_message,'') as m from public.observability_events
     where error_message is not null and error_message <> '' limit 500;`)
   const obsDirty = obsErr.filter((r) => r.m.length > 120)
-  if (obsDirty.length === 0) ok(`observability_events.error_message is shaped (${obsErr.length} non-empty row(s), none over 120 chars)`)
-  else { bad('observability_events.error_message carries free text', `${obsDirty.length} row(s)`); leaks.push('observability_events.error_message') }
-
-  // telemetry_events.attrs: the capture event carried the user-authored routing_hint
-  // verbatim. Any non-empty value is a leak, not just a long one.
-  const hintDirty = await sql(`
-    select count(*)::int as n from public.telemetry_events
-     where attrs ? 'routing_hint' and coalesce(attrs->>'routing_hint','') <> '';`)
-  if ((hintDirty[0]?.n ?? -1) === 0) ok('telemetry_events.attrs carries no verbatim routing_hint')
-  else { bad('telemetry_events.attrs carries a verbatim routing_hint', `${hintDirty[0].n} row(s); migration 0022 clears them`); leaks.push('telemetry_events.attrs') }
-
-  if (leaks.length) console.log(`\n  NOTE: ${leaks.length} column(s) still carry content: ${leaks.join(', ')}. Migration 0022 redacts them; this guard is correct to fail until it applies.\n`)
+  if (obsDirty.length === 0) ok(`observability_events.error_message is shaped (${obsErr.length} non-empty row(s) checked, none over 120 chars)`)
+  else bad('observability_events.error_message carries free text', `${obsDirty.length} of ${obsErr.length} row(s)`)
 
   // 5. clean up and confirm zero residue.
   await sql(`delete from public.observability_events where meta->>'smoke' = '${q(TAG)}';`)

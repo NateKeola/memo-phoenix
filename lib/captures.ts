@@ -6,6 +6,21 @@ import type { CaptureTargetKind } from '@/lib/capture-target'
 export type CaptureMode = 'text' | 'memo' | 'interview'
 export type CaptureModality = 'text' | 'voice'
 
+// The routing_hint values this codebase sets ITSELF. These are enums, not user text,
+// so telemetry records them verbatim; anything else is typed by the user into
+// components/capture-text-form.tsx and only its length is recorded.
+//
+// SOURCE OF TRUTH for the SQL mirror in migration 0022
+// (public.mp_routing_hint_is_code_constant). If you add a literal routingHint anywhere,
+// add it here AND to that function, or the value becomes redactable user content.
+// Enumerated 2026-08-07: app/people/new/actions.ts:28 and :53 are the only call sites
+// that pass a literal.
+export const ROUTING_HINT_CONSTANTS = ['contact', 'contact_import'] as const
+
+export function isCodeAuthoredRoutingHint(hint: string | null | undefined): boolean {
+  return !!hint && (ROUTING_HINT_CONSTANTS as readonly string[]).includes(hint)
+}
+
 export type CaptureInput = {
   mode: CaptureMode
   modality: CaptureModality
@@ -91,9 +106,12 @@ export async function writeCapture(
     attrs: {
       mode: input.mode,
       modality: input.modality,
-      // the hint itself is user-authored text about real people; telemetry gets its
-      // size, not its content (the capture row holds the real thing).
-      routing_hint_chars: input.routingHint?.length ?? 0,
+      // A code-authored hint is a shaped enum and is recorded as itself. A
+      // user-typed one is text about real people, so telemetry gets only its size;
+      // captures.routing_hint still holds the real thing.
+      ...(isCodeAuthoredRoutingHint(input.routingHint)
+        ? { routing_hint: input.routingHint }
+        : { routing_hint_chars: input.routingHint?.length ?? 0 }),
       target_kind: input.targetKind ?? null,
       target_id: input.targetId ?? null,
     },

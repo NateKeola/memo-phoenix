@@ -98,6 +98,31 @@ const secdef = fns.filter((f) => f.prosecdef).map((f) => f.proname).sort()
 if (JSON.stringify(secdef) === JSON.stringify(['snapshot_canonical'])) ok('only snapshot_canonical is SECURITY DEFINER')
 else bad('unexpected SECURITY DEFINER functions', secdef.join(',') || 'none')
 
+console.log('\n== append-only tables still have their forbid_mutation trigger, ENABLED ==')
+// Nothing asserted this before. Migration 0022 temporarily disables
+// telemetry_events_append_only to redact content that should never have been written,
+// so from now on the harness must SEE the trigger back on rather than assume it.
+// Enumerated from the live catalog, never a hardcoded list, and the denominator is
+// reported: a check that cannot say what it did not look at is not a check.
+const appendOnly = await sql(`
+  select c.relname as table_name, t.tgname as trigger_name, t.tgenabled
+    from pg_trigger t
+    join pg_class c on c.oid = t.tgrelid
+    join pg_namespace n on n.oid = c.relnamespace
+   where n.nspname = 'public'
+     and not t.tgisinternal
+     and pg_get_triggerdef(t.oid) ilike '%forbid_mutation%'
+   order by c.relname;`)
+// tgenabled: 'O' = enabled (origin), 'D' = disabled, 'R'/'A' = replica/always.
+const disabled = appendOnly.filter((t) => t.tgenabled === 'D')
+if (appendOnly.length === 0) {
+  bad('no forbid_mutation triggers found at all', 'the append-only layer is gone')
+} else if (disabled.length === 0) {
+  ok(`all ${appendOnly.length} append-only trigger(s) present and ENABLED (${appendOnly.map((t) => t.table_name).join(', ')})`)
+} else {
+  bad(`${disabled.length} of ${appendOnly.length} append-only trigger(s) are DISABLED`, disabled.map((t) => `${t.table_name}.${t.trigger_name}`).join(', '))
+}
+
 console.log('\n== client roles cannot bypass RLS ==')
 for (const r of roles) {
   if (!r.rolbypassrls) ok(`${r.rolname} bypassrls=false`)
