@@ -28,7 +28,9 @@
     "seed": "tsx packages/miner-core/src/seed.ts",
     "check:pages": "tsx scripts/check-page-limit.ts",
     "seed:guards": "node scripts/seed-guard-accounts.mjs",
-    "check:orphans": "tsx scripts/check-orphans.ts"
+    "check:orphans": "tsx scripts/check-orphans.ts",
+    "prepare": "git config core.hooksPath .githooks || true",
+    "setup:hooks": "git config core.hooksPath .githooks"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",

@@ -1,0 +1,53 @@
+#!/bin/sh
+# Refuse a push to main.
+#
+# WHY THIS EXISTS. On 2026-08-07 migration 0022, which disables an append-only
+# trigger and required the human destructive-migration label, reached production
+# via a direct push to main. The cause was not a missing rule: the rule "if on the
+# default branch, branch first" was already written down, and a related standing
+# rule had been added to CLAUDE.md an hour earlier. The cause was that nobody ran
+# `git branch --show-current` before pushing. A rule you can forget is not a guard.
+#
+# THIS HOOK IS THE FAST LOCAL SIGNAL, NOT THE REAL GUARD. It is per-clone, and
+# `git push --no-verify` skips it. GitHub branch protection requiring a pull
+# request is the server-side guard that cannot be bypassed. See docs/HANDOFF.md.
+#
+# Activated by `git config core.hooksPath .githooks`, which package.json's
+# "prepare" script runs on npm install.
+
+protected='main'
+blocked=0
+
+# pre-push receives "<local ref> <local sha> <remote ref> <remote sha>" per line.
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    "refs/heads/$protected") blocked=1 ;;
+  esac
+done
+
+if [ "$blocked" -eq 1 ]; then
+  if [ "${ALLOW_PUSH_TO_MAIN:-}" = "1" ]; then
+    echo "pre-push: ALLOW_PUSH_TO_MAIN=1 set, permitting a push to $protected." >&2
+    exit 0
+  fi
+  cat >&2 <<'MSG'
+
+  pre-push REFUSED: this pushes to main.
+
+  Every change to main goes through a pull request. A direct push skips CI, skips
+  review, and auto-applies any migration in the diff (migrate.yml runs on push to
+  main), which is exactly how a destructive migration shipped unlabelled once.
+
+  Do this instead:
+      git checkout -b <branch>
+      git push -u origin <branch>
+      gh pr create
+
+  If you genuinely need to push to main, say so deliberately:
+      ALLOW_PUSH_TO_MAIN=1 git push
+
+MSG
+  exit 1
+fi
+
+exit 0
