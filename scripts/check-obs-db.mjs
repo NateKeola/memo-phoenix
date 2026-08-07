@@ -144,6 +144,111 @@ try {
   if (bannedKeys.length === 0) ok('meta has no content-bearing key name')
   else bad('meta has a content-bearing key', bannedKeys.join(','))
 
+  // 4b. PRIVACY, miner per-model-call telemetry (event_type='llm_call').
+  // These rows are written by packages/miner-core/src/call-telemetry.ts, one per model
+  // call. The model's response text summarizes real people, so it is user content: it
+  // goes to stdout only (the Action log) and must never reach a table. The emitter
+  // filters through LLM_CALL_ATTR_KEYS; these assertions prove the property holds on
+  // the rows that actually landed. They are inert until the first mine writes some,
+  // and load-bearing from then on. Keep this list in sync with LLM_CALL_ATTR_KEYS.
+  const LLM_CALL_ATTR_KEYS = [
+    'pass', 'ctx', 'batch', 'attempt', 'attempts_allowed',
+    'batch_limit', 'claims_sent', 'already_emitted_sent', 'user_chars',
+    'stop_reason', 'text_chars', 'block_count', 'block_types', 'items_returned',
+    'tokens_in', 'tokens_out', 'tokens_thinking', 'cache_read', 'cache_write', 'duration_ms',
+    'outcome', 'error_class', 'rejected_claim_id',
+  ]
+  // The scan, factored out so it can be exercised on a known-dirty row below. Returns
+  // the violations found, so an empty result is a pass.
+  const scanLlmCallRows = (rows) => {
+    const stray = new Set()
+    const banned = new Set()
+    const long = new Set()
+    for (const row of rows) {
+      for (const [k, v] of Object.entries(row.attrs || {})) {
+        if (!LLM_CALL_ATTR_KEYS.includes(k)) stray.add(k)
+        if (/^(transcript|body|prompt|content|answer|question|message|summary|label|text|raw)$/i.test(k)) banned.add(k)
+        // model output is LONG free text; every legitimate attr here is an id, a count,
+        // an enum, or a short array of block-type names.
+        if (typeof v === 'string' && v.length > 120) long.add(k)
+        if (Array.isArray(v) && v.some((x) => typeof x === 'string' && x.length > 120)) long.add(k)
+      }
+    }
+    return { stray: [...stray], banned: [...banned], long: [...long] }
+  }
+
+  // Prove the scan is not a no-op BEFORE trusting it on live rows: a row carrying a
+  // slab of model prose under a plausible key must be caught on all three axes.
+  // In-memory only; nothing is written to any table.
+  const dirty = scanLlmCallRows([
+    { attrs: { pass: 'canonical_people', summary: 'Mal Corpus is one of the oldest friends from the surf club. '.repeat(4) } },
+  ])
+  if (dirty.stray.includes('summary') && dirty.banned.includes('summary') && dirty.long.includes('summary')) {
+    ok('llm_call privacy scan catches a planted model-output attr (assertion is not vacuous)')
+  } else bad('llm_call privacy scan failed to catch planted content', JSON.stringify(dirty))
+
+  const callRows = await sql(`
+    select name, attrs from public.telemetry_events
+    where event_type = 'llm_call' order by created_at desc limit 500;`)
+  const found = scanLlmCallRows(callRows)
+  ok(`llm_call telemetry readable (${callRows.length} row(s) present)`)
+  if (found.stray.length === 0) ok('llm_call attrs carry only whitelisted shaped keys')
+  else bad('llm_call attrs have keys outside the whitelist', found.stray.join(','))
+  if (found.banned.length === 0) ok('llm_call attrs have no content-bearing key name')
+  else bad('llm_call attrs have a content-bearing key', found.banned.join(','))
+  if (found.long.length === 0) ok('llm_call attrs are all short/shaped (no model output can be hiding in them)')
+  else bad('llm_call attrs have long string values', found.long.join(','))
+
+  // 4c. PRIVACY, the operational columns that persist an exception or a telemetry
+  // payload. THESE ARE HARD ASSERTIONS. The rule they enforce: anything persisted to a
+  // database column is shaped, anything written to stdout may be full. A soft report
+  // here is worse than a failure, because the harness certified 8 of 8 for weeks while
+  // three rows of user content sat in miner_runs.error that nothing ever looked at.
+  //
+  // Cleared by migration 0022; until it applies these SHOULD fail, and that is the
+  // guard working.
+  const leaks = []
+
+  // miner_runs.error: mineWithLock persists a thrown Error here. Two shapes have
+  // leaked: a JSON slice after the parser message, and the model-chosen canonical
+  // LABEL embedded in the error context ('node "Jen Skinner"').
+  const errRows = await sql(`
+    select coalesce(error, '') as error from public.miner_runs
+    where error is not null and error <> '' order by started_at desc limit 200;`)
+  const errDirty = errRows.filter((r) => /valid JSON \(.*\)\s*:\s*[{[]/s.test(r.error) || /node "[^"]+"/.test(r.error))
+  if (errDirty.length === 0) ok('miner_runs.error carries no model-authored content')
+  else { bad('miner_runs.error carries model-authored content', `${errDirty.length} row(s); migration 0022 clears them`); leaks.push('miner_runs.error') }
+
+  // miner_runs.summary: PassResult.discrepancyItems carries model-authored `subject`
+  // and `description` prose. The shaped `discrepancies` COUNT is fine and stays.
+  const sumDirty = await sql(`
+    select count(*)::int as n from public.miner_runs
+     where summary is not null
+       and exists (select 1 from jsonb_array_elements(coalesce(summary->'passes','[]'::jsonb)) p
+                    where jsonb_typeof(p->'discrepancyItems') = 'array'
+                      and jsonb_array_length(p->'discrepancyItems') > 0);`)
+  if ((sumDirty[0]?.n ?? -1) === 0) ok('miner_runs.summary carries no model-authored discrepancy prose')
+  else { bad('miner_runs.summary carries discrepancyItems', `${sumDirty[0].n} row(s); migration 0022 clears them`); leaks.push('miner_runs.summary') }
+
+  // observability_events.error_message: free text on the one table that HAS a privacy
+  // assertion, and it was exempt from it. Same shaping test as meta values.
+  const obsErr = await sql(`
+    select coalesce(error_message,'') as m from public.observability_events
+    where error_message is not null and error_message <> '' limit 500;`)
+  const obsDirty = obsErr.filter((r) => r.m.length > 120)
+  if (obsDirty.length === 0) ok(`observability_events.error_message is shaped (${obsErr.length} non-empty row(s), none over 120 chars)`)
+  else { bad('observability_events.error_message carries free text', `${obsDirty.length} row(s)`); leaks.push('observability_events.error_message') }
+
+  // telemetry_events.attrs: the capture event carried the user-authored routing_hint
+  // verbatim. Any non-empty value is a leak, not just a long one.
+  const hintDirty = await sql(`
+    select count(*)::int as n from public.telemetry_events
+     where attrs ? 'routing_hint' and coalesce(attrs->>'routing_hint','') <> '';`)
+  if ((hintDirty[0]?.n ?? -1) === 0) ok('telemetry_events.attrs carries no verbatim routing_hint')
+  else { bad('telemetry_events.attrs carries a verbatim routing_hint', `${hintDirty[0].n} row(s); migration 0022 clears them`); leaks.push('telemetry_events.attrs') }
+
+  if (leaks.length) console.log(`\n  NOTE: ${leaks.length} column(s) still carry content: ${leaks.join(', ')}. Migration 0022 redacts them; this guard is correct to fail until it applies.\n`)
+
   // 5. clean up and confirm zero residue.
   await sql(`delete from public.observability_events where meta->>'smoke' = '${q(TAG)}';`)
   const left = await sql(`select count(*)::int as n from public.observability_events where meta->>'smoke' = '${q(TAG)}';`)

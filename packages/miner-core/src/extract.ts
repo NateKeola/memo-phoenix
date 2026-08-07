@@ -157,7 +157,7 @@ export async function extractCapture(capture: Capture): Promise<ExtractResult> {
   const extractBody = aboutLine ? `${aboutLine}\n\n${body}` : body
   const user = JSON.stringify({ mode: capture.mode, modality: capture.modality, body: extractBody })
   const res = await callClaude(EXTRACTION_PROMPT, user)
-  const parsed = parseModelObject(res.raw, `extract capture ${capture.id}`)
+  const parsed = parseModelObject(res.raw, `extract capture ${capture.id}`, res.meta)
 
   let rawInserted = 0
   for (const [section, table] of Object.entries(SECTION_TABLE)) {
