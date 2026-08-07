@@ -218,3 +218,4 @@ BACKLOG (not yet phased; spec/build later):
 IN-FLIGHT DESIGN not yet built: none beyond the roadmap above. Phase 3 is the immediate next build and its shape is settled (a read-only calendar over `today.ts` data). Phase 4's split is design-settled (a claim-level `split_person` correction) but its precursor (persist discrepancies/open_threads) must land first.
 
 OPERATOR CONFIG still worth confirming in the deployed Vercel env (unchanged by Phases 1-2): `MEMO_ADMIN_EMAIL`, `NEXT_PUBLIC_SITE_URL`; the miner Action secrets (`NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`) and optionally `CRON_SECRET` / `GITHUB_DISPATCH_TOKEN` / `GITHUB_REPO` for the headless cron sweep; and the 8 pre-existing `inc-harness-*@test.invalid` throwaway accounts in auth.users are RLS-isolated + harmless (retire via the admin API if a pristine list is wanted).
+
