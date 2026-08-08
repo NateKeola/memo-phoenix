@@ -21,7 +21,7 @@ Fourteen stages. Entry points and process boundary:
 | # | Stage | Entry point | Runs in |
 |---|---|---|---|
 | 1 | Transcription (voice only) | `app/api/capture/memo/route.ts`, via `lib/stt/elevenlabs.ts` | App only |
-| 2 | Capture write | `writeCapture`, `lib/captures.ts` | App only |
+| 2 | Capture write | `writeCapture`, `lib/captures.ts:52`, **and one bypass**, see below | App only |
 | 3 | Run claim and lock | `mineWithLock`, `packages/miner-core/src/run.ts:184` | Either |
 | 4 | User-id assertion | `assertUserId`, `run.ts` | Either |
 | 5 | Capture read, exclusions applied | `readCaptureIds` / `readExcludedCaptureIds`, `stage-common.ts:22` | Either |
@@ -47,6 +47,20 @@ Fourteen stages. Entry points and process boundary:
 8. `insights` (`derive.ts:673`)
 
 Stages 10 and 11 run between pass 2 and pass 3, so that stages B and C read corrected people labels.
+
+**Correction to stage 2, found by adversarial verification of this audit's own first draft.** `captures` is written from **2 insert sites of 12 `.from('captures')` sites in the app and miner** (the other 10 are reads). Only one goes through `writeCapture`. The interview path inserts directly (`app/api/interview/end/route.ts:83`):
+
+```ts
+  const { data: cap, error } = await supabase
+    .from('captures')
+    .insert({
+      user_id: user.id,
+      mode: 'interview',
+```
+
+`writeCapture` applies two guards that this path therefore does not get: the size cap `MAX_CAPTURE_CHARS` at `lib/captures.ts:38`, default 100,000 chars, enforced at `lib/captures.ts:57`; and the content-dedup window `DEDUP_WINDOW_MS` at `lib/captures.ts:44`, 10 minutes, enforced at `lib/captures.ts:66`. **Interview transcripts are the longest capture type in the system and are the one capture type with neither a length cap nor a double-submit guard.**
+
+Capture-write denominator: 6 paths, 5 through `writeCapture` (`app/context-actions.ts:29`, `app/capture/text/actions.ts:23`, `app/people/new/actions.ts:24`, `app/people/new/actions.ts:53`, `app/api/capture/memo/route.ts:71`) and 1 direct.
 
 **The process boundary.** `mine()` and everything under it is a single Node process. There are exactly three ways to start it, and no other:
 
@@ -700,4 +714,5 @@ Stated so the denominator is honest.
 - Miine's `stage-summaries.ts` (380 lines), `compose-rounds.ts` (783 lines) and `summaries-dump.ts` (286 lines) were not read; they are outside the mining path this audit compares.
 - Resolver tier distribution, per A3, is not determined by any evidence available.
 - The future graph size that would justify a retrieval index, per C4, is not determined.
+- The first draft of this document stated the capture-write path as `writeCapture` alone. That was an incomplete enumeration, corrected in A1 above after an adversarial pass over this audit. It is recorded rather than silently fixed because it is the same denominator failure the document is written to guard against.
 - Cost attribution assumes the measured chars-per-token ratio holds within a pass across batches. It was validated on batch 1 of every pass in run 8, 8 of 8, and not on later batches.
