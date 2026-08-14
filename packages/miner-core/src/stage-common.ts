@@ -11,7 +11,7 @@ import {
 import { admin } from './supabase'
 import { translateClaimHandles, type ClaimHandles } from './handles'
 import { canonicalJson, sha256 } from './identity'
-import { addUsage, emptyUsage, type DiscrepancyItem, type ModelNode, type Usage } from './types'
+import { addUsage, emptyUsage, type DiscrepancyItem, type ModelNode, type Retirement, type RetirementOutcome, type Usage } from './types'
 
 // ---- reads ------------------------------------------------------------------
 
@@ -529,9 +529,17 @@ export async function retireAbsorbedRows(
   // LIVE edge onto a retired one and remove the relationship from the current
   // graph entirely.
   keptRetiredIds: Set<string> = new Set()
-): Promise<{ retired: number; mapping: Map<string, string | null> }> {
-  const none = { retired: 0, mapping: new Map<string, string | null>() }
-  if (process.env.MINER_RETIRE_ABSORBED === '0') return none
+): Promise<{ retired: number; mapping: Map<string, string | null>; retirement: Retirement }> {
+  // A-1: every exit names its outcome, so "retired 0" is never ambiguous. The
+  // counts distinguish the empty table (current: 0) from "attempted, nothing
+  // qualified" without a separate enum member; under 'disabled' the counts are
+  // zeros because this returns before the table is read.
+  const none = (outcome: RetirementOutcome, current: number, qualified = 0, cap = 0) => ({
+    retired: 0,
+    mapping: new Map<string, string | null>(),
+    retirement: { outcome, current, qualified, cap, retired: 0 },
+  })
+  if (process.env.MINER_RETIRE_ABSORBED === '0') return none('disabled', 0)
 
   const { data, error } = await admin()
     .from(table)
@@ -543,7 +551,8 @@ export async function retireAbsorbedRows(
     id: String((r as { id: string }).id),
     claims: ((r as { source_claim_ids: string[] | null }).source_claim_ids ?? []) as string[],
   }))
-  if (current.length === 0) return none
+  if (current.length === 0) return none('none_qualified', 0)
+  const cap = Math.max(5, Math.floor(current.length * 0.5))
 
   const live = emitted.filter((e) => !keptRetiredIds.has(e.id))
   const emittedIds = new Set(live.map((e) => e.id))
@@ -556,15 +565,14 @@ export async function retireAbsorbedRows(
       r.claims.length > 0 &&
       r.claims.every((c) => attributed.has(c) || excludedClaimIds.has(c))
   )
-  if (candidates.length === 0) return none
+  if (candidates.length === 0) return none('none_qualified', current.length, 0, cap)
 
-  const cap = Math.max(5, Math.floor(current.length * 0.5))
   if (candidates.length > cap) {
     console.warn(
       `[miner] retirement SKIPPED for ${table}: ${candidates.length} rows qualified ` +
         `(> safety cap ${cap} of ${current.length} current); refusing a mass retirement`
     )
-    return none
+    return none('cap_refused', current.length, candidates.length, cap)
   }
 
   const now = new Date().toISOString()
@@ -590,7 +598,11 @@ export async function retireAbsorbedRows(
     mapping.set(r.id, successor)
   }
   if (mapping.size > 0) console.log(`[miner] ${table}: retired ${mapping.size} absorbed/retracted row(s)`)
-  return { retired: mapping.size, mapping }
+  return {
+    retired: mapping.size,
+    mapping,
+    retirement: { outcome: 'retired', current: current.length, qualified: candidates.length, cap, retired: mapping.size },
+  }
 }
 
 type ExistingRow = {

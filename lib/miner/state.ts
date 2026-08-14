@@ -36,7 +36,61 @@ type MineSummaryShape = {
   // A failed run carries only { mode } (stamped early by mineWithLock).
   mode?: string
   newCaptures?: number
-  passes?: Array<{ inserted?: number; updated?: number; unchanged?: number; skipped?: boolean }>
+  passes?: Array<{
+    table?: string
+    inserted?: number
+    updated?: number
+    unchanged?: number
+    skipped?: boolean
+    // A-1 retirement signal, written per pass since Phase 1 of the miner cost fix.
+    // Absent on older runs and on passes that never attempted retirement.
+    retirement?: { outcome?: string; current?: number; qualified?: number; cap?: number; retired?: number }
+  }>
+}
+
+// Per-run rollup of the A-1 retirement signal, for the Memory-screen ledger.
+// "empty" (attempted against a table with no current rows) is deliberately
+// distinct from "nothing qualified" (attempted against a live table): the enum
+// has no empty member, current: 0 inside none_qualified is the load-bearing
+// distinction (decision in docs/miner-cost-fix-plan.md 4.1).
+export type RefusedRetirement = { table: string; qualified: number; cap: number; current: number }
+export type RetirementRollup = {
+  retired: number // rows retired across all passes
+  refused: RefusedRetirement[] // cap_refused passes, each with its counts
+  nothingQualified: number // passes attempted with current rows and zero qualified
+  empty: number // passes attempted against a table with no current rows
+  off: number // passes reporting the env kill switch
+  notAttempted: number // passes that never called retirement (memo-skipped)
+}
+
+// Null when NO pass carries a retirement object (pre-Phase-1 runs), so old
+// ledger rows render exactly as before.
+export function summarizeRetirement(summary: MineSummaryShape | null | undefined): RetirementRollup | null {
+  if (!summary || !Array.isArray(summary.passes)) return null
+  if (!summary.passes.some((p) => p.retirement)) return null
+  const roll: RetirementRollup = { retired: 0, refused: [], nothingQualified: 0, empty: 0, off: 0, notAttempted: 0 }
+  for (const p of summary.passes) {
+    const r = p.retirement
+    if (!r) {
+      roll.notAttempted++
+      continue
+    }
+    roll.retired += r.retired || 0
+    if (r.outcome === 'cap_refused') {
+      roll.refused.push({
+        table: p.table ?? 'unknown',
+        qualified: r.qualified || 0,
+        cap: r.cap || 0,
+        current: r.current || 0,
+      })
+    } else if (r.outcome === 'disabled') {
+      roll.off++
+    } else if (r.outcome === 'none_qualified') {
+      if ((r.current || 0) === 0) roll.empty++
+      else roll.nothingQualified++
+    }
+  }
+  return roll
 }
 
 export type LedgerRun = {
@@ -58,6 +112,8 @@ export type LedgerRun = {
   // 'full' | 'incremental' | 'noop' | null (null for pre-mode-recording runs)
   mode: string | null
   newCaptures: number | null
+  // null for runs that predate the retirement signal
+  retirement: RetirementRollup | null
 }
 
 export type MinerState = {
@@ -110,6 +166,7 @@ function toLedgerRow(r: Record<string, unknown>, nowMs: number): LedgerRun {
     extracted: typeof summary?.extracted === 'number' ? summary.extracted : null,
     mode: typeof summary?.mode === 'string' ? summary.mode : null,
     newCaptures: typeof summary?.newCaptures === 'number' ? summary.newCaptures : null,
+    retirement: summarizeRetirement(summary),
   }
 }
 

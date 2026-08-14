@@ -161,6 +161,16 @@ All from brief I-7, read-only queries, user MEMO_USER_ID
   falling through to "full"; renders **no retirement information of any
   kind** (grep across lib/app/components: zero canonical-retirement reads;
   `summarizeChanges` folds only inserted/updated/unchanged).
+- Retirement backlog, measured from the Actions logs (pulled 2026-08-14,
+  both runs still in retention; recorded here so the figures survive log
+  expiry, as the before-picture for Stage E): `canonical_facts` 57 qualified
+  of 110 current at cap 55, measured 2026-08-07 (run 8) and unmeasured
+  since, because the facts pass memo-skipped in run 9 and retirement never
+  ran; `canonical_projects` 17 qualified of 27 current at cap 13, measured
+  2026-08-08 (run 9). Run 9 also retired events 12, relationships 21,
+  commitments 30, insights 2; run 8 retired people 4, places_orgs 3,
+  events 8, relationships 20, commitments 12, and additionally refused
+  `canonical_projects` at 18 qualified of 28 current (cap 14).
 
 ## 4. Per-phase breakdown
 
@@ -215,6 +225,21 @@ must NOT be added to `llm_call` attrs, or `LLM_CALL_ATTR_KEYS` in both
 `call-telemetry.ts` and `check-obs-db.mjs:154-160` would need extending.
 
 No migration. `git diff --stat -- supabase/migrations/` stays empty.
+
+**A-1 outcome decision (recorded 2026-08-14, shipped in Phase 1).** The
+outcome enum carries NO separate empty-table member: `current: 0` under
+`none_qualified` is load-bearing, and the Memory screen renders "empty"
+distinctly from "nothing qualified" off that count (the rollup distinction
+is computed in `lib/miner/state.ts` `summarizeRetirement`; the wording in
+`components/miner-control.tsx` `retirementLabel`). Reason: the two states
+differ in what was examined, not in what happened (zero rows qualified in
+both), so the count carries the difference without a second axis of
+meaning, and the rendering is asserted rather than implied. One member WAS
+added relative to this section's three-member design: `retired`, the
+success arm, so an outcome is never inferred from `retired > 0`; inferring
+state from a count is the one-value-two-meanings pattern A-1 exists to
+kill, and leaving the success case to that inference would have rebuilt it
+at the function's own success exit.
 
 ### 4.2 Phase 2, Stage B, corrections stop forcing a full. One PR.
 
@@ -279,6 +304,28 @@ passthrough `lib/miner/state.ts:111` (no change needed).
 
 Harness impact: zero (I-6 finding 8: no run-mode string exists in any of
 the 8 surfaces).
+
+**The shape guard (recorded 2026-08-14 for Phase 2 planning; operator
+ruling).** The O-1 measurements (19 of 19 corrections carry their targeted
+id; 5 of 5 merge survivors live; 0 of 14 pass-dependent) are OBSERVATIONS
+of today's data, not guarantees: nothing server-side enforces them, and
+existing pending rows were written without validation. The
+corrections_only path therefore verifies its preconditions at run time and
+falls back to a full recompute when any of THREE conditions holds: (1) a
+correction's targeted id is missing or names a non-current row; (2) a
+survivor cannot be resolved among current rows at apply time; (3) any
+operation skips rather than completes (the `corrections.ts:190-196`
+warn-and-skip path). Condition 3 exists because of a retry asymmetry:
+today a skipped merge retries on every full recompute, but under
+corrections_only with the fingerprint advanced it would never retry, so a
+skip must count as outside the proven shape. The concrete mechanism
+motivating the guard: the label-hash fallback at `corrections.ts:153`
+silently misses a row whose id was minted by the resolver, and 17.6
+percent of live people ids are minted uuidv4 (12 of 68, master context
+s20). The unvalidated `person_id` at `app/people/actions.ts:29-31` is
+recorded under found-not-fixed (item 10) as its own future PR and is NOT
+fixed in Phase 2; the guard is required regardless, because pending rows
+written before any future validation still exist.
 
 ### 4.3 Phase 3, Stage D, interview captures through writeCapture. One PR.
 
@@ -382,14 +429,28 @@ resolved-cross-brief items noted as resolved):
 8. Live miner_run attr key sets as persisted (I-3; emitter-shape claim is
    from source).
 9. Whether any admin component renders attrs generically with a fixed key
-   list (I-3).
+   list (I-3). RESOLVED 2026-08-14: none does. Zero readers of
+   `telemetry_events` exist outside miner-core (the sole repo reference in
+   app/lib/components is the INSERT at `lib/telemetry.ts:26`); all 31
+   `attrs` references in app/ and components/ are logEvent writes; the
+   observability page reads `miner_runs.summary` through a tolerant typed
+   pick (`app/admin/observability/page.tsx:171`), not a key iterator.
+   Denominator: 28 files under components/, the observability page's full
+   query surface, and the 9 miner-data-reading files enumerated. Phase 1's
+   five new attrs have no render-surface exposure.
 10. Whether the five-member tier enum was intended to require the
     context/fuzzy split (I-3; section 4.1 decides yes, label-only).
 11. Which of the four sites produced run 81b518d5's two `retired: 0`
     values (I-4; the column cannot say; Actions stdout is off-machine).
+    RESOLVED 2026-08-14 from the retained log: `canonical_projects` was
+    cap_refused (the 00:32:47 SKIPPED line binds it) and `canonical_people`
+    was none_qualified (no SKIPPED line, and the kill switch was
+    demonstrably off since four other tables retired rows that run).
 12. Whether Actions log retention still holds the retirement SKIPPED lines
     for 2026-08-08, i.e. whether the current backlog is recoverable
-    without a run (I-4).
+    without a run (I-4). RESOLVED 2026-08-14: both runs' logs fetched in
+    full; the backlog figures are banked in section 3 so they survive log
+    expiry.
 13. Whether observability_events carries per-pass retirement attrs (I-4;
     scoped out of its brief).
 14. Whether any capture insert exists outside the JS/TS surface, raw SQL
@@ -429,6 +490,20 @@ finding 2, adopted in section 4.1.
 8. The 2026-08-07 00:15 error run at stage canonical_people with zero
    llm_call rows cannot be classified between zero-calls and
    lost-telemetry (I-7).
+9. PROVENANCE GAP: the master context names
+   `docs/miner-architecture-audit.md` as the source of its MEASURED
+   numbers, and that file does not exist on main. It lives only on the
+   unmerged branch `miner-architecture-audit` (PR #52, OPEN, tip
+   `c5d4c11`). Until that merges, the evidence chain for every MEASURED
+   figure routes through an unmerged branch; and since this plan's C1 and
+   C2 corrected two of that audit's own figures, the merge should land the
+   audit as historical record, not as current truth.
+10. The rename/merge server actions validate labels only: `renamePerson`
+    inserts `input.personId` unvalidated
+    (`app/people/actions.ts:29-31`) and `mergePeople` never checks its
+    ids for existence or currency. Its own future PR, by operator ruling;
+    NOT fixed in Phase 2 (the Phase 2 shape guard, section 4.2, is
+    required regardless).
 
 ## 9. Stop conditions checked
 

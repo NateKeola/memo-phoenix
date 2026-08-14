@@ -121,7 +121,7 @@ Route `rename_person` and `merge_people` through their existing pure graph opera
 
 ## 2.2 Constraints **[Locked]**
 
-- **Atomicity.** Never leave the fingerprint advanced with the relabel unapplied, or the reverse. One or the other, in a single transaction.
+- **Atomicity.** The fingerprint advance is the last write. Graph operations complete first. The state of an advanced fingerprint with the relabel unapplied must be unreachable by construction, not merely unlikely. Any failure leaves the fingerprint stale so the next mine retries. This requires every graph operation to be idempotent, which is an acceptance criterion, not an assumption. *(Amended 2026-08-14 by operator ruling, adopting the Phase 0 plan's Option B; the original read "in a single transaction", which the PostgREST client cannot provide without a plpgsql migration. See `docs/miner-cost-fix-plan.md` 4.2.)*
 - **Correction kinds that genuinely need derivation still force it.** If the O-1 investigation shows one of them does, say so plainly with evidence and let it force a full. Do not force a full defensively for both because one is uncertain.
 - **The mode value is visible.** `corrections_only` appears in `miner_runs`, in the observability console, and on the Memory screen's run-mode chip. The operator must be able to see that it cost nothing.
 - **The next ordinary mine must still produce a correct graph.** The old label is kept as an alias; confirm the graph remains correct on the following mine given that.

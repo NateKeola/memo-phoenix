@@ -29,7 +29,11 @@ export type ResolveCandidate = {
   contextKey?: string | null
 }
 
-export type ResolveVia = 'exact' | 'alias' | 'fuzzy' | 'mint'
+// 'context' is a fuzzy-tier match where both sides carried an agreeing context
+// key, so the relaxed threshold was in play. It is split from 'fuzzy' as a
+// RETURN LABEL ONLY (A-2 legibility); thresholds, ordering, and the ambiguity
+// guard are identical for both labels.
+export type ResolveVia = 'exact' | 'alias' | 'fuzzy' | 'context' | 'mint'
 
 // Defaults are env-tunable but conservative. The person-corroborated threshold
 // mirrors the proven companion-overlay re-match (0.5 with person, 0.8 without).
@@ -110,20 +114,20 @@ export function resolveId(input: {
 
   // 3. fuzzy: best token-Jaccard candidate above threshold; ambiguity-guarded.
   const labelToks = tokens(labelNorm)
-  const scored: Array<{ c: ResolveCandidate; score: number; thresh: number }> = []
+  const scored: Array<{ c: ResolveCandidate; score: number; thresh: number; bothCtx: boolean }> = []
   for (const c of candidates) {
     const cCtx = c.contextKey ? String(c.contextKey) : null
     if (ctx && cCtx && ctx !== cCtx) continue // disagreeing context is a hard no
     const bothCtx = Boolean(ctx && cCtx && ctx === cCtx)
     let best = jaccard(labelToks, tokens(c.label))
     for (const a of c.aliases) best = Math.max(best, jaccard(labelToks, tokens(a)))
-    scored.push({ c, score: best, thresh: bothCtx ? ctxThresh : strict })
+    scored.push({ c, score: best, thresh: bothCtx ? ctxThresh : strict, bothCtx })
   }
   const passing = scored.filter((s) => s.score >= s.thresh).sort((a, b) => b.score - a.score)
   if (passing.length > 0) {
     // ambiguity guard: if the top two are near-tied, do not merge (too risky)
     if (passing.length === 1 || passing[0].score - passing[1].score >= AMBIGUITY_MARGIN) {
-      return { id: passing[0].c.id, via: 'fuzzy' }
+      return { id: passing[0].c.id, via: passing[0].bothCtx ? 'context' : 'fuzzy' }
     }
   }
 

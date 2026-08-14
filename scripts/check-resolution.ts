@@ -107,7 +107,9 @@ console.log('\n== context key (commitment linked person) ==')
     aliasMap: m([]),
     contextKey: 'PA',
   })
-  check('same-person commitment drift -> same id (context fuzzy)', r.id === 'C1' && r.via === 'fuzzy', `got ${r.id}/${r.via}`)
+  // A-2 split: an agreeing-context fuzzy match now reports via 'context' (label
+  // only; the id, threshold, and ordering are unchanged).
+  check('same-person commitment drift -> same id (context)', r.id === 'C1' && r.via === 'context', `got ${r.id}/${r.via}`)
 }
 {
   // disagreeing person is a hard NO even with high label overlap

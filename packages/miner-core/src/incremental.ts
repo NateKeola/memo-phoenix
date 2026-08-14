@@ -57,7 +57,7 @@ import { runDerivation } from './derive'
 import { loadClaimDates, reconcileFreshness, supersedeFromDiscrepancies } from './freshness'
 import { STABLE_IDENTITY, buildResolver, persistAliases } from './resolve-store'
 import type { Resolver } from './resolution'
-import { emptyUsage, type DiscrepancyItem, type PassResult, type TemporalClass } from './types'
+import { emptyTiers, emptyUsage, type DiscrepancyItem, type PassResult, type TemporalClass, type TierCounts } from './types'
 
 export const INCREMENTAL = process.env.MINER_INCREMENTAL === '1'
 
@@ -348,6 +348,7 @@ async function incNodePass(userId: string, cfg: IncNodeConfig): Promise<PassResu
         cfg.canonicalTable === 'canonical_commitments' ? { contextOf: (d) => asString(d.person_id) } : {}
       )
     : null
+  const tiers = resolver ? emptyTiers() : undefined
 
   // Build the emitted rows for the new claims (mirrors derive.ts runNodePass).
   const byId = new Map<string, CanonRow>()
@@ -364,11 +365,14 @@ async function incNodePass(userId: string, cfg: IncNodeConfig): Promise<PassResu
     const rawData = node.data && typeof node.data === 'object' ? (node.data as Record<string, unknown>) : {}
     const nodeData = split ? { ...rawData, first_name: split.first, last_name: split.last } : rawData
     const contextKey = cfg.canonicalTable === 'canonical_commitments' ? asString(rawData.person_id) : null
-    const id = resolver
-      ? resolver.resolve(name, nodeAliases, contextKey).id
-      : split
-        ? canonicalPersonId(userId, split.first, split.last)
-        : canonicalId(userId, cfg.canonicalTable, name)
+    let id: string
+    if (resolver) {
+      const rr = resolver.resolve(name, nodeAliases, contextKey)
+      id = rr.id
+      if (tiers) tiers[rr.via]++
+    } else {
+      id = split ? canonicalPersonId(userId, split.first, split.last) : canonicalId(userId, cfg.canonicalTable, name)
+    }
     const existing = byId.get(id)
     if (existing) {
       existing.source_claim_ids = Array.from(new Set([...existing.source_claim_ids, ...cited]))
@@ -408,6 +412,7 @@ async function incNodePass(userId: string, cfg: IncNodeConfig): Promise<PassResu
     discrepancyItems: collected.discrepancyItems,
     open_threads: collected.open_threads,
     usage: collected.usage,
+    tiers,
   }
 }
 
@@ -701,6 +706,21 @@ export async function runIncrementalDerivation(
   // Advance the markers ONLY now, after the merge + freshness succeeded.
   await markIncorporated(userId, unincorporated)
 
+  // A-2 aggregate: the incremental path emits no per-pass miner_run telemetry, so
+  // the resolver histogram lands summed across passes on this whole-run event.
+  // The five counts sum to the run's resolution attempts. Null when no pass ran
+  // the resolver (MINER_STABLE_IDENTITY off), and the keys are then omitted.
+  const tierSum = results.reduce<TierCounts | null>((acc, p) => {
+    if (!p.tiers) return acc
+    const t = acc ?? emptyTiers()
+    t.exact += p.tiers.exact
+    t.alias += p.tiers.alias
+    t.fuzzy += p.tiers.fuzzy
+    t.context += p.tiers.context
+    t.mint += p.tiers.mint
+    return t
+  }, null)
+
   await logEvent({
     user_id: userId,
     event_type: 'miner_run',
@@ -713,6 +733,15 @@ export async function runIncrementalDerivation(
       superseded: sup.superseded,
       last_confirmed_updated: recon.lastConfirmedUpdated,
       salience_updated: recon.salienceUpdated,
+      ...(tierSum
+        ? {
+            resolve_exact: tierSum.exact,
+            resolve_alias: tierSum.alias,
+            resolve_fuzzy: tierSum.fuzzy,
+            resolve_context: tierSum.context,
+            resolve_mint: tierSum.mint,
+          }
+        : {}),
     },
   })
 

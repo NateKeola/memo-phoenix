@@ -47,6 +47,32 @@ export type Usage = {
   cache_creation_input_tokens: number
 }
 
+// A-1 retirement signal (docs/miner-cost-fix-plan.md 4.1). One member per exit of
+// retireAbsorbedRows, so an outcome is never inferred from a count: 'retired' is
+// the success arm, the other three are the return-none reasons. There is
+// deliberately NO separate empty-table member: current: 0 under 'none_qualified'
+// is the load-bearing distinction (an empty table cannot qualify rows), and the
+// Memory screen renders "empty" distinctly from "nothing qualified" off that count.
+export type RetirementOutcome = 'retired' | 'none_qualified' | 'cap_refused' | 'disabled'
+
+export type Retirement = {
+  outcome: RetirementOutcome
+  // current rows examined; rows that qualified; the safety cap; rows retired.
+  // Under 'disabled' the counts are zeros because the table is never read, so
+  // current: 0 there does not mean an empty table.
+  current: number
+  qualified: number
+  cap: number
+  retired: number
+}
+
+// A-2 resolver histogram: how each resolve() call in a pass resolved. The five
+// counts sum to the pass's resolution attempts by construction: every call
+// increments exactly one member.
+export type TierCounts = { exact: number; alias: number; fuzzy: number; context: number; mint: number }
+
+export const emptyTiers = (): TierCounts => ({ exact: 0, alias: 0, fuzzy: 0, context: 0, mint: 0 })
+
 export type PassResult = {
   table: string
   skipped: boolean // memoized: input unchanged since last run
@@ -63,6 +89,13 @@ export type PassResult = {
   discrepancyItems?: DiscrepancyItem[]
   // rows retired by the absorbed-evidence rule (full derivation only; convergence)
   retired?: number
+  // why retirement did or did not act. Absent means the pass never attempted it
+  // (memo-skipped, or a pass that does not retire), rendered as "not attempted",
+  // distinct from every attempted outcome.
+  retirement?: Retirement
+  // resolver tier histogram. Absent when the stable-identity resolver is off or
+  // the pass performs no resolution (relationships are endpoint-keyed).
+  tiers?: TierCounts
 }
 
 export const emptyUsage = (): Usage => ({
