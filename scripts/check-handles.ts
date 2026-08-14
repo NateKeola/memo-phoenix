@@ -116,8 +116,21 @@ check('a malformed or empty response does not throw at translation', !emptyThrew
 console.log('\n== independence between passes ==')
 const h2 = issueHandles(CLAIMS)
 check('a second pass mints a different handle set', CLAIMS.some((c) => h2.handleFor(c) !== h.handleFor(c)))
-check("one pass cannot resolve another pass' handle for a different claim",
-  CLAIMS.every((c) => { const r = h2.claimFor(h.handleFor(c)); return r === null || r === c }))
+// DELIBERATELY NOT ASSERTED: zero cross-pass handle collision. Two passes each
+// issuing 200 handles from a 32^4 space share some string at
+// 1 - exp(-200*199/32^4) = 3.72% per run (measured 3.68% over 10,000 trials
+// with the real generator), so "one pass cannot resolve another pass' handle"
+// fails at that rate by design. It also guards nothing: a handle never
+// outlives its pass. issueHandles is called once per pass (runNodePass,
+// runRelationshipsPass, runInsightsPass in derive.ts; incNodePass and the
+// incremental relationships pass in incremental.ts), each binding a
+// pass-local handles object whose only consumer is the translation point
+// inside paginatedCollect for that same pass's responses. The properties
+// production does depend on, uniqueness within a pass and loud failure on
+// unissued handles within a pass, are asserted deterministically above. Do
+// not re-add an absolute cross-pass assertion; if cross-pass correlation
+// ever matters, line 118's different-handle-set check is the deterministic
+// canary for a degenerate or seeded generator.
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)
