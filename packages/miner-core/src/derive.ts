@@ -40,7 +40,7 @@ import {
   STAGE_C_COMMITMENTS_PROMPT,
   STAGE_C_INSIGHTS_PROMPT,
 } from './prompts.generated'
-import { addUsage, emptyUsage, type DiscrepancyItem, type PassResult, type TemporalClass } from './types'
+import { addUsage, emptyTiers, emptyUsage, type DiscrepancyItem, type PassResult, type TemporalClass } from './types'
 import { loadClaimDates, reconcileFreshness, supersedeFromDiscrepancies } from './freshness'
 import { STABLE_IDENTITY, buildResolver, persistAliases } from './resolve-store'
 import type { Resolver } from './resolution'
@@ -111,7 +111,7 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
     const excludedClaims = await readExcludedClaimIds(userId, cfg.rawTable)
     const r = await retireAbsorbedRows(userId, cfg.canonicalTable, [], excludedClaims)
     await setState(userId, scope, hash)
-    return { ...emptyPass(cfg.canonicalTable, false), retired: r.retired }
+    return { ...emptyPass(cfg.canonicalTable, false), retired: r.retired, retirement: r.retirement }
   }
 
   const known = new Set(claims.map((c) => c.id))
@@ -165,6 +165,7 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
         cfg.canonicalTable === 'canonical_commitments' ? { contextOf: (d) => asString(d.person_id) } : {}
       )
     : null
+  const tiers = resolver ? emptyTiers() : undefined
 
   const byId = new Map<string, {
     id: string
@@ -198,11 +199,14 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
     // not the id. OFF: the prior label-derived id (people on first+last, which
     // reconstructs the label so existing ids are preserved).
     const contextKey = cfg.canonicalTable === 'canonical_commitments' ? asString(rawData.person_id) : null
-    const id = resolver
-      ? resolver.resolve(name, nodeAliases, contextKey).id
-      : split
-        ? canonicalPersonId(userId, split.first, split.last)
-        : canonicalId(userId, cfg.canonicalTable, name)
+    let id: string
+    if (resolver) {
+      const rr = resolver.resolve(name, nodeAliases, contextKey)
+      id = rr.id
+      if (tiers) tiers[rr.via]++
+    } else {
+      id = split ? canonicalPersonId(userId, split.first, split.last) : canonicalId(userId, cfg.canonicalTable, name)
+    }
     const existing = byId.get(id)
     if (existing) {
       // two surface forms normalized to the same id (a merge, or just casing): union
@@ -250,7 +254,6 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
     for (const [loser, successor] of ret.mapping) if (successor) repointMap.set(loser, successor)
     if (repointMap.size > 0) await repointReferences(userId, repointMap)
   }
-  const retired = ret.retired
   await setState(userId, scope, hash)
   return {
     table: cfg.canonicalTable,
@@ -264,7 +267,9 @@ async function runNodePass(userId: string, cfg: NodePassConfig): Promise<PassRes
     discrepancyItems: collected.discrepancyItems,
     open_threads: collected.open_threads,
     usage: collected.usage,
-    retired,
+    retired: ret.retired,
+    retirement: ret.retirement,
+    tiers,
   }
 }
 
@@ -286,7 +291,7 @@ async function runRelationshipsPass(
     const excludedClaims = await readExcludedClaimIds(userId, 'raw_relationships')
     const r = await retireAbsorbedRows(userId, table, [], excludedClaims)
     await setState(userId, scope, hash)
-    return { ...emptyPass(table, false), retired: r.retired }
+    return { ...emptyPass(table, false), retired: r.retired, retirement: r.retirement }
   }
 
   const known = new Set(claims.map((c) => c.id))
@@ -369,7 +374,7 @@ async function runRelationshipsPass(
   const rows = Array.from(byId.values())
   const w = await writeCanonical(userId, table, rows)
   const excludedClaims = await readExcludedClaimIds(userId, 'raw_relationships')
-  const { retired } = await retireAbsorbedRows(
+  const ret = await retireAbsorbedRows(
     userId,
     table,
     rows.map((r) => ({ id: r.id, source_claim_ids: r.source_claim_ids })),
@@ -389,7 +394,8 @@ async function runRelationshipsPass(
     discrepancyItems: collected.discrepancyItems,
     open_threads: collected.open_threads + dropped, // unresolved endpoints become threads
     usage: collected.usage,
-    retired,
+    retired: ret.retired,
+    retirement: ret.retirement,
   }
 }
 
@@ -460,6 +466,7 @@ async function runInsightsPass(
   const resolver: Resolver | null = STABLE_IDENTITY
     ? await buildResolver(userId, table, { labelOf: (d) => asString(d.statement) })
     : null
+  const tiers = resolver ? emptyTiers() : undefined
 
   const byId = new Map<string, {
     id: string
@@ -477,7 +484,14 @@ async function runInsightsPass(
     if (!statement) continue
     const cited = uniqueStrings(ins.supporting_claim_ids)
     if (cited.length === 0) continue
-    const id = resolver ? resolver.resolve(statement).id : canonicalId(userId, table, statement)
+    let id: string
+    if (resolver) {
+      const rr = resolver.resolve(statement)
+      id = rr.id
+      if (tiers) tiers[rr.via]++
+    } else {
+      id = canonicalId(userId, table, statement)
+    }
     if (byId.has(id)) continue
     byId.set(id, {
       id,
@@ -504,7 +518,7 @@ async function runInsightsPass(
   // absorbed (this is what stops the recurring_tension pile-up). No excluded-claim
   // set here: insight provenance spans all raw tables and the absorbed rule alone
   // converges it.
-  const { retired } = await retireAbsorbedRows(
+  const ret = await retireAbsorbedRows(
     userId,
     table,
     rows.map((r) => ({ id: r.id, source_claim_ids: r.source_claim_ids })),
@@ -524,7 +538,9 @@ async function runInsightsPass(
     discrepancyItems: collected.discrepancyItems,
     open_threads: collected.open_threads,
     usage: collected.usage,
-    retired,
+    retired: ret.retired,
+    retirement: ret.retirement,
+    tiers,
   }
 }
 
@@ -560,6 +576,18 @@ export async function runDerivation(
         tokens_out: p.usage.output_tokens,
         cache_read: p.usage.cache_read_input_tokens,
         cache_creation: p.usage.cache_creation_input_tokens,
+        // A-2 resolver histogram: how each resolve() call in this pass resolved.
+        // The five counts sum to the pass's resolution attempts. Present only when
+        // the pass ran the stable-identity resolver. Shaped integers (rule 14.5).
+        ...(p.tiers
+          ? {
+              resolve_exact: p.tiers.exact,
+              resolve_alias: p.tiers.alias,
+              resolve_fuzzy: p.tiers.fuzzy,
+              resolve_context: p.tiers.context,
+              resolve_mint: p.tiers.mint,
+            }
+          : {}),
       },
     })
   }

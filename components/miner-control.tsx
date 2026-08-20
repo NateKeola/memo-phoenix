@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import type { MinerState, LedgerRun } from '@/lib/miner/state'
+import type { MinerState, LedgerRun, RetirementRollup } from '@/lib/miner/state'
 import { BrandSeed } from '@/components/brand-seed'
 
 const TRIGGER_LABEL: Record<string, string> = {
@@ -177,28 +177,52 @@ function LedgerLine({ run }: { run: LedgerRun }) {
   const trigger = TRIGGER_LABEL[run.trigger] ?? run.trigger
   const mode = runModeLabel(run)
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', width: '100%' }}>
-      <span style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-        <span style={{ fontSize: 16, color: 'var(--txt)' }}>{when}</span>
-        <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 11, letterSpacing: '0.06em', background: 'var(--surf-2)', color: 'var(--txt-faint)', padding: '4px 8px', borderRadius: 6 }}>{trigger}</span>
-          {mode ? <span style={{ fontSize: 11, letterSpacing: '0.04em', background: 'var(--accent-soft)', color: 'var(--accent)', padding: '4px 8px', borderRadius: 6 }}>{mode}</span> : null}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', width: '100%' }}>
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          <span style={{ fontSize: 16, color: 'var(--txt)' }}>{when}</span>
+          <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, letterSpacing: '0.06em', background: 'var(--surf-2)', color: 'var(--txt-faint)', padding: '4px 8px', borderRadius: 6 }}>{trigger}</span>
+            {mode ? <span style={{ fontSize: 11, letterSpacing: '0.04em', background: 'var(--accent-soft)', color: 'var(--accent)', padding: '4px 8px', borderRadius: 6 }}>{mode}</span> : null}
+          </span>
         </span>
-      </span>
-      <span style={{ textAlign: 'right', fontSize: 14, color: statusColor(run.status) }}>
-        {run.status === 'running' ? `in progress${run.stage ? ` (${run.stage})` : ''}` : null}
-        {run.status === 'stalled'
-          ? `stopped responding${run.stage ? ` in ${run.stage}` : ''}; will be cleaned up automatically`
-          : null}
-        {run.status === 'error' ? `failed${run.error ? `: ${run.error.slice(0, 80)}` : ''}` : null}
-        {run.status === 'done'
-          ? run.changes
-            ? `added ${run.changes.inserted}, updated ${run.changes.updated}, unchanged ${run.changes.unchanged}`
-            : 'complete'
-          : null}
-      </span>
+        <span style={{ textAlign: 'right', fontSize: 14, color: statusColor(run.status) }}>
+          {run.status === 'running' ? `in progress${run.stage ? ` (${run.stage})` : ''}` : null}
+          {run.status === 'stalled'
+            ? `stopped responding${run.stage ? ` in ${run.stage}` : ''}; will be cleaned up automatically`
+            : null}
+          {run.status === 'error' ? `failed${run.error ? `: ${run.error.slice(0, 80)}` : ''}` : null}
+          {run.status === 'done'
+            ? run.changes
+              ? `added ${run.changes.inserted}, updated ${run.changes.updated}, unchanged ${run.changes.unchanged}`
+              : 'complete'
+            : null}
+        </span>
+      </div>
+      {run.retirement ? (
+        <span style={{ fontSize: 12, color: 'var(--txt-faint)' }}>{retirementLabel(run.retirement)}</span>
+      ) : null}
     </div>
   )
+}
+
+// The A-1 retirement signal, per run. Distinct wordings on purpose: "refused" is
+// the safety cap abandoning qualified rows (the backlog signal), "nothing
+// qualified" is an attempted pass over a live table that found no absorbed rows,
+// "empty" is an attempted pass over a table with no current rows (current: 0 is
+// what separates the last two), and "not attempted" is a pass that never called
+// retirement (memo-skipped). Old runs carry no signal and render no line.
+function retirementLabel(r: RetirementRollup): string {
+  const parts: string[] = []
+  if (r.retired > 0) parts.push(`retired ${r.retired}`)
+  for (const f of r.refused) {
+    parts.push(`${f.table.replace(/^canonical_/, '')} refused: ${f.qualified} qualified, cap ${f.cap} of ${f.current}`)
+  }
+  if (r.off > 0) parts.push(`off for ${r.off}`)
+  if (r.nothingQualified > 0) parts.push(`nothing qualified ${r.nothingQualified}`)
+  if (r.empty > 0) parts.push(`empty ${r.empty}`)
+  if (r.notAttempted > 0) parts.push(`not attempted ${r.notAttempted}`)
+  return `retirement: ${parts.join(' · ')}`
 }
 
 function statusColor(s: string): string {
